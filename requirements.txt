@@ -1,0 +1,13 @@
+pandas
+numpy
+requests
+joblib
+astral
+timezonefinder
+pytz
+mysql-connector-python
+scikit-learn
+mavsdk
+xgboost
+geopy
+lightgbm
