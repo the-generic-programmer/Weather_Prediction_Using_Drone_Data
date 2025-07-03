@@ -2,7 +2,6 @@
 
 import warnings
 import logging
-warnings.filterwarnings("ignore", message="Protobuf gencode version*")
 import asyncio
 from mavsdk import System
 import csv
@@ -22,32 +21,76 @@ from mysql.connector import Error
 logging.basicConfig(
     level=logging.INFO,
     format='[%(asctime)s] %(levelname)s: %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
+    datefmt='%Y-%m-%d %H:%M:%S',
+    handlers=[
+        logging.FileHandler('mavsdk_logger.log'),
+        logging.StreamHandler()
+    ]
 )
+
+# Load configuration
+CONFIG_FILE = Path("config.json")
+if not CONFIG_FILE.exists():
+    logging.error("Configuration file config.json not found. Run setup_mysql.py first.")
+    sys.exit(1)
+with open(CONFIG_FILE, 'r') as f:
+    CONFIG = json.load(f)
 
 # Makes a directory called mavsdk_logs if it doesn't exist
 LOG_DIR = Path("mavsdk_logs")
 LOG_DIR.mkdir(exist_ok=True)
-# Makes a CSV file with a timestamp in the name
 CSV_FILE = LOG_DIR / f"drone_log_{datetime.datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
 
 # TCP config
-TCP_PORT = 9000
-# MAVSDK stream rate in Hz (adjustable)
-MAVSDK_STREAM_RATE = 20.0  # Hz, set to 20Hz by default
-# TCP stream rate in Hz (adjustable at runtime)
-TCP_STREAM_RATE = 5.0  # Default 5Hz
+TCP_PORT = CONFIG.get('tcp_port', 9000)
+MAVSDK_STREAM_RATE = 20.0  # Hz
+TCP_STREAM_RATE = 5.0  # Hz
 shutdown_flag = False
 
-# Weather SQL Logger
+def find_free_port(start_port: int, max_attempts: int = 5) -> Optional[int]:
+    """Find an available port starting from start_port."""
+    for port in range(start_port, start_port + max_attempts):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                s.bind(("0.0.0.0", port))
+                logging.info(f"Port {port} is available")
+                return port
+        except OSError as e:
+            logging.warning(f"Port {port} is in use: {e}")
+    logging.error(f"No available ports in range {start_port} to {start_port + max_attempts - 1}")
+    return None
+
+def prompt_for_port() -> Optional[int]:
+    """Prompt user for a custom port if default range is unavailable."""
+    print(f"No available ports in range {TCP_PORT} to {TCP_PORT + 4}.")
+    print("Please enter a custom port number (1024-65535) or press Enter to exit:")
+    try:
+        user_input = input("Custom port: ").strip()
+        if not user_input:
+            return None
+        port = int(user_input)
+        if 1024 <= port <= 65535:
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                    s.bind(("0.0.0.0", port))
+                    logging.info(f"Custom port {port} is available")
+                    return port
+            except OSError:
+                logging.error(f"Custom port {port} is also in use")
+                return None
+        else:
+            logging.error("Port must be between 1024 and 65535")
+            return None
+    except ValueError:
+        logging.error("Invalid port number entered")
+        return None
+
 class WeatherMySQLLogger:
     def __init__(self):
-        self.db_config = {
-            'host': 'localhost',
-            'user': 'root',
-            'password': 'Root@123',
-            'database': 'weather_mavsdk_logger'
-        }
+        self.db_config = CONFIG['mysql'].copy()
+        self.db_config['database'] = 'weather_mavsdk_logger'
         self.table_name = 'weather_logs'
         self.fields = [
             "timestamp", "latitude", "longitude", "altitude_from_sealevel", "relative_altitude",
@@ -56,24 +99,7 @@ class WeatherMySQLLogger:
         ]
         self.conn = None
         self.cursor = None
-        self._create_database()
         self._setup()
-
-    def _create_database(self):
-        """Create the database if it doesn't exist."""
-        temp_config = self.db_config.copy()
-        temp_config.pop('database', None)
-        try:
-            conn = mysql.connector.connect(**temp_config)
-            cursor = conn.cursor()
-            cursor.execute(f"CREATE DATABASE IF NOT EXISTS {self.db_config['database']}")
-            conn.commit()
-            logging.info(f"Database {self.db_config['database']} created or exists")
-            cursor.close()
-            conn.close()
-        except Error as e:
-            logging.error(f"Failed to create database {self.db_config['database']}: {e}")
-            raise
 
     def _setup(self):
         try:
@@ -119,7 +145,6 @@ class WeatherMySQLLogger:
             pass
 
 def set_tcp_stream_rate(rate_hz: float):
-    """Set the TCP stream rate (Hz) for publishing combined telemetry."""
     global TCP_STREAM_RATE
     if rate_hz > 0:
         TCP_STREAM_RATE = rate_hz
@@ -127,17 +152,14 @@ def set_tcp_stream_rate(rate_hz: float):
     else:
         logging.warning("TCP stream rate must be positive.")
 
-# Global shutdown flag
 default_shutdown_flag = False
 shutdown_flag = default_shutdown_flag
 
 def remove_none(d: Dict[str, Any]) -> Dict[str, Any]:
-    """Remove keys with None values from a dictionary."""
     return {k: v for k, v in d.items() if v is not None}
 
 class TCPServer:
-    """Threaded TCP server for broadcasting JSON messages to clients."""
-    def __init__(self, port: int = 9000):
+    def __init__(self, port: int = TCP_PORT):
         self.clients = []
         self.lock = Lock()
         self.running = False
@@ -147,17 +169,16 @@ class TCPServer:
 
     def start(self):
         try:
-            # Check if port is available
-            temp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            temp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            try:
-                temp_socket.bind(("0.0.0.0", self.port))
-            except OSError as e:
-                logging.error(f"Port {self.port} is already in use: {e}")
-                raise
-            finally:
-                temp_socket.close()
-
+            # Find a free port
+            self.port = find_free_port(self.port)
+            if not self.port:
+                self.port = prompt_for_port()
+                if not self.port:
+                    raise OSError(
+                        f"No available ports. Please free port 9000 (e.g., 'sudo kill -9 12345' for PID 12345) "
+                        "or configure a different port in config.json. Check processes with: sudo netstat -tulnp | grep 9000"
+                    )
+            
             self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             self.server_socket.bind(("0.0.0.0", self.port))
@@ -166,6 +187,11 @@ class TCPServer:
             self.accept_thread = Thread(target=self._accept_clients, daemon=True)
             self.accept_thread.start()
             logging.info(f"TCP Server started on port {self.port}")
+            # Update config with new port
+            CONFIG['tcp_port'] = self.port
+            with open(CONFIG_FILE, 'w') as f:
+                json.dump(CONFIG, f, indent=2)
+            logging.info(f"Updated config.json with TCP port {self.port}")
         except Exception as e:
             logging.error(f"Error starting TCP server: {e}")
             raise
@@ -224,24 +250,18 @@ class TCPServer:
                 pass
         if self.accept_thread and self.accept_thread.is_alive():
             self.accept_thread.join(timeout=2.0)
+        logging.info("TCP server stopped")
 
 class CSVLogger:
-    """Thread-safe CSV logger for drone telemetry data with fixed column order."""
     FIXED_FIELDS = [
         "timestamp", "source", "sequence",
-        # Position
         "latitude", "longitude", "altitude_from_sealevel", "relative_altitude",
-        # Battery
         "voltage", "remaining_percent",
-        # IMU
         "angular_velocity_forward_rad_s", "angular_velocity_right_rad_s", "angular_velocity_down_rad_s",
         "linear_acceleration_forward_m_s2", "linear_acceleration_right_m_s2", "linear_acceleration_down_m_s2",
         "magnetic_field_forward_gauss", "magnetic_field_right_gauss", "magnetic_field_down_gauss", "temperature_degc",
-        # Attitude
         "roll_deg", "pitch_deg", "yaw_deg", "timestamp_us",
-        # Velocity
         "north_m_s", "east_m_s", "down_m_s",
-        # System time
         "system_time", "unix_time"
     ]
     def __init__(self, file_path: Path):
@@ -288,7 +308,6 @@ class CSVLogger:
             logging.error(f"Error flushing CSV data: {e}")
 
 class MySQLLogger:
-    """MySQL logger for drone telemetry data with fixed column order."""
     def __init__(self, db_config: Dict[str, Any], table_name: str, fields: list):
         self.db_config = db_config
         self.table_name = table_name
@@ -296,24 +315,7 @@ class MySQLLogger:
         self.conn = None
         self.cursor = None
         self.connected = False
-        self._create_database()
         self._connect_and_setup()
-
-    def _create_database(self):
-        """Create the database if it doesn't exist."""
-        temp_config = self.db_config.copy()
-        temp_config.pop('database', None)
-        try:
-            conn = mysql.connector.connect(**temp_config)
-            cursor = conn.cursor()
-            cursor.execute(f"CREATE DATABASE IF NOT EXISTS {self.db_config['database']}")
-            conn.commit()
-            logging.info(f"Database {self.db_config['database']} created or exists")
-            cursor.close()
-            conn.close()
-        except Error as e:
-            logging.error(f"Failed to create database {self.db_config['database']}: {e}")
-            raise
 
     def _connect_and_setup(self):
         try:
@@ -362,16 +364,11 @@ def signal_handler(signum, frame):
     shutdown_flag = True
 
 def initialize_databases():
-    """Initialize databases at script start."""
     try:
         weather_sql_logger = WeatherMySQLLogger()
         weather_sql_logger.close()
-        db_config = {
-            'host': 'localhost',
-            'user': 'root',
-            'password': 'Root@123',
-            'database': 'weather_mavsdk_logger'
-        }
+        db_config = CONFIG['mysql'].copy()
+        db_config['database'] = 'weather_mavsdk_logger'
         table_name = f"flight_{datetime.datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
         mysql_logger = MySQLLogger(db_config, table_name, CSVLogger.FIXED_FIELDS)
         mysql_logger.close()
@@ -379,11 +376,8 @@ def initialize_databases():
         logging.error(f"Failed to initialize databases: {e}")
         raise
 
-# Main logger logic
 async def run():
     global shutdown_flag
-
-    # Prompt user for logging options
     print("Select logging options (comma separated, e.g. sql,csv,tcp):")
     print("Options: sql, csv, tcp")
     user_input = input("Log to (default: csv,tcp): ").strip().lower()
@@ -407,28 +401,31 @@ async def run():
         'position': {},
         'battery': {},
         'velocity': {},
-        'system_time': {}
+        'system_time': {},
+        'wind': {}
     }
-    # MySQL config
-    db_config = {
-        'host': 'localhost',
-        'user': 'root',
-        'password': 'Root@123',
-        'database': 'weather_mavsdk_logger'
-    }
+    db_config = CONFIG['mysql'].copy()
+    db_config['database'] = 'weather_mavsdk_logger'
     table_name = f"flight_{datetime.datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
     try:
-        # Initialize TCP server early if enabled
         if log_to_tcp:
             logging.info("Initializing TCP server...")
             tcp_server = TCPServer(port=TCP_PORT)
-            tcp_server.start()
+            try:
+                tcp_server.start()
+            except OSError as e:
+                logging.error(f"Failed to start TCP server: {e}")
+                logging.error(
+                    f"Port {tcp_server.port} is in use. To free it, run: sudo kill -9 12345\n"
+                    "Check processes with: sudo netstat -tulnp | grep 9000\n"
+                    "Alternatively, edit config.json to use a different port."
+                )
+                raise
 
-        # Connect to drone
         logging.info("Connecting to drone...")
         await drone.connect(system_address="udp://:14550")
         logging.info("Waiting for drone to connect...")
-        connection_timeout = 30  # seconds
+        connection_timeout = 30
         start_time = asyncio.get_event_loop().time()
         async for state in drone.core.connection_state():
             if state.is_connected:
@@ -439,7 +436,6 @@ async def run():
             if shutdown_flag:
                 return
 
-        # Initialize loggers
         if log_to_csv:
             logger = CSVLogger(CSV_FILE)
             logging.info(f"CSV logger initialized for {CSV_FILE}")
@@ -697,13 +693,12 @@ async def run():
             tcp_server.stop()
 
 if __name__ == "__main__":
-    # Set up signal handlers
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
     try:
         logging.info("Starting MAVSDK logger...")
-        initialize_databases()  # Ensure databases are created at start
+        initialize_databases()
         asyncio.run(run())
     except KeyboardInterrupt:
         logging.info("Logging stopped by user.")

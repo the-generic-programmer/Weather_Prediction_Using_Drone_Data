@@ -1,0 +1,11 @@
+[2025-07-03 16:21:37] INFO: MySQL is already installed
+[2025-07-03 16:21:37] INFO: MySQL already installed
+[2025-07-03 16:21:56] INFO: MySQL root access successful
+[2025-07-03 16:21:56] INFO: Provided root password is correct
+[2025-07-03 16:21:56] INFO: Database weather_mavsdk_logger created or exists
+[2025-07-03 16:21:56] INFO: Database weather_predict created or exists
+[2025-07-03 16:21:56] INFO: Table weather_logs created or exists
+[2025-07-03 16:21:56] INFO: Table flight_20250703_105156 created or exists
+[2025-07-03 16:21:56] INFO: Table predictions created or exists
+[2025-07-03 16:21:56] INFO: Configuration saved to config.json
+[2025-07-03 16:21:56] INFO: MySQL setup completed successfully

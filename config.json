@@ -1,0 +1,13 @@
+{
+  "mysql": {
+    "host": "localhost",
+    "user": "root",
+    "password": "Root@123",
+    "database": "weather_predict"
+  },
+  "tcp_port": 9001,
+  "expected_coords": [
+    13.0,
+    77.625
+  ]
+}

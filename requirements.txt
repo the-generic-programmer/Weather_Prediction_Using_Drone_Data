@@ -13,3 +13,9 @@ geopy
 lightgbm
 cfgrib
 tensorflow
+tensorflow-addons
+keras
+keras-tuner
+scipy
+matplotlib
+seaborn

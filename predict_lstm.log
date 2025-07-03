@@ -1,0 +1,6 @@
+[2025-07-03 17:47:24] INFO: Using input file: /home/rahul/Documents/GitHub/Weather_Prediction_Using_Drone_Data/data/openmeteo_forecast_51.5074_-0.1278_20250703T100042_train.csv
+[2025-07-03 17:47:24] INFO: Loading input CSV: /home/rahul/Documents/GitHub/Weather_Prediction_Using_Drone_Data/data/openmeteo_forecast_51.5074_-0.1278_20250703T100042_train.csv
+[2025-07-03 17:47:24] INFO: CSV columns: ['timestamp', 'forecast_wind_speed', 'forecast_wind_direction', 'temperature_2m', 'relative_humidity_2m', 'pressure_msl', 'cloudcover', 'precipitation', 'weathercode']
+[2025-07-03 17:47:24] WARNING: Wind direction column not found in CSV. Fetching from Open-Meteo.
+[2025-07-03 17:47:24] ERROR: Failed to parse coordinates or fetch wind direction: could not convert string to float: 'Using'
+[2025-07-03 17:47:24] ERROR: Fatal error: Cannot compute wind_dir_cos and wind_dir_sin: no wind direction data available
