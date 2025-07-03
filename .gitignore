@@ -1,5 +1,9 @@
 # Ignore all files in the models directory
 models/*
-
 # But do not ignore the directory itself
 !models/
+
+# Ignore all files in the data directory
+data/*
+# But do not ignore the directory itself
+!data/
