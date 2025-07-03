@@ -74,7 +74,7 @@ def main():
     
     # Get data for last 2 years
     end_date = datetime.now()
-    start_date = end_date - timedelta(days=365*2)
+    start_date = end_date - timedelta(days=365*5)  # 5 years of data
     
     # Format dates
     start_str = start_date.strftime("%Y-%m-%d")

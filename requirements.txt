@@ -11,3 +11,5 @@ mavsdk
 xgboost
 geopy
 lightgbm
+cfgrib
+tensorflow

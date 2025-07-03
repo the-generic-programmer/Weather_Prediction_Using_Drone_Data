@@ -12,11 +12,11 @@ import os
 class WeatherPredictor:
     def __init__(self):
         self.model = RandomForestRegressor(
-            n_estimators=600,
-            max_depth=20,
-            min_samples_split=10,
-            min_samples_leaf=7,
-            random_state=50
+            n_estimators=1000,
+            max_depth=25,
+            min_samples_split=5,
+            min_samples_leaf=2,
+            random_state=42
         )
         self.scaler = StandardScaler()
         
