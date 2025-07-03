@@ -1,5 +1,5 @@
 import requests
-import cfgrib
+import xarray as xr
 import pandas as pd
 import numpy as np
 import os
@@ -22,29 +22,46 @@ def download_gfs_grib(run_time, forecast_hour, save_path):
     else:
         raise Exception(f"Failed to download: {url}")
 
-def extract_wind_from_grib(grib_path, lat, lon):
-    ds = cfgrib.open_dataset(grib_path, filter_by_keys={'typeOfLevel': 'isobaricInhPa'})
-    u = ds['u'].sel(longitude=lon, latitude=lat, method='nearest')
-    v = ds['v'].sel(longitude=lon, latitude=lat, method='nearest')
-    wind_speed = np.sqrt(u**2 + v**2)
-    wind_dir = (np.arctan2(u, v) * 180 / np.pi) % 360
-    df = pd.DataFrame({
-        'pressure_hPa': u['isobaricInhPa'].values,
-        'wind_speed': wind_speed.values,
-        'wind_direction': wind_dir.values
-    })
-    return df
+def extract_wind_from_grib(grib_path, lat, lon, level=850):
+    """Extract wind speed and direction from GRIB2 file at given lat/lon and pressure level."""
+    try:
+        ds = xr.open_dataset(
+            grib_path,
+            engine="cfgrib",
+            backend_kwargs={
+                "filter_by_keys": {
+                    "typeOfLevel": "isobaricInhPa",
+                    "level": level
+                }
+            }
+        )
+    except Exception as e:
+        raise RuntimeError(f"Failed to open GRIB file: {e}")
 
-def fetch_gfs_wind_timeseries(lat, lon, start_time, hours=24, run_hour='00'):
+    if 'u' in ds.variables and 'v' in ds.variables:
+        u = ds['u'].sel(longitude=lon, latitude=lat, method='nearest')
+        v = ds['v'].sel(longitude=lon, latitude=lat, method='nearest')
+        wind_speed = np.sqrt(u**2 + v**2)
+        wind_dir = (np.arctan2(u, v) * 180 / np.pi) % 360
+        df = pd.DataFrame({
+            'wind_speed': wind_speed.values,
+            'wind_direction': wind_dir.values,
+            'pressure_level_hPa': level
+        })
+        return df
+    else:
+        raise ValueError("Wind components 'u' and 'v' not found in dataset.")
+
+def fetch_gfs_wind_timeseries(lat, lon, start_time, hours=24, run_hour='00', level=850):
     """Fetch wind timeseries for a location from GFS for a given start time and duration."""
     os.makedirs('data', exist_ok=True)
     dfs = []
     run_time = start_time.strftime('%Y%m%d_') + run_hour
-    for fh in range(0, hours+1, 3):
+    for fh in range(0, hours + 1, 3):
         grib_file = f"data/gfs_{run_time}_f{fh:03d}.grib2"
         try:
             download_gfs_grib(run_time, fh, grib_file)
-            df = extract_wind_from_grib(grib_file, lat, lon)
+            df = extract_wind_from_grib(grib_file, lat, lon, level=level)
             df['forecast_hour'] = fh
             df['timestamp'] = start_time + timedelta(hours=fh)
             dfs.append(df)
@@ -52,15 +69,16 @@ def fetch_gfs_wind_timeseries(lat, lon, start_time, hours=24, run_hour='00'):
             print(f"Failed for hour {fh}: {e}")
     if dfs:
         result = pd.concat(dfs, ignore_index=True)
-        result.to_csv(f"data/gfs_wind_{lat}_{lon}_{start_time.strftime('%Y%m%d')}.csv", index=False)
-        print(f"Saved timeseries to data/gfs_wind_{lat}_{lon}_{start_time.strftime('%Y%m%d')}.csv")
+        csv_path = f"data/gfs_wind_{lat}_{lon}_{start_time.strftime('%Y%m%d')}_level{level}.csv"
+        result.to_csv(csv_path, index=False)
+        print(f"Saved timeseries to {csv_path}")
         return result
     else:
         print("No data fetched.")
         return None
 
 if __name__ == "__main__":
-    # Example: London, 2025-07-02 00Z
+    # Example: London, 2025-07-02 00Z at 850 hPa
     lat, lon = 51.5074, -0.1278
     start_time = datetime(2025, 7, 2, 0)
-    fetch_gfs_wind_timeseries(lat, lon, start_time, hours=24, run_hour='00')
+    fetch_gfs_wind_timeseries(lat, lon, start_time, hours=24, run_hour='00', level=850)

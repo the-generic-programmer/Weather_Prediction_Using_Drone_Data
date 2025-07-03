@@ -56,9 +56,9 @@ def prepare_lstm_input(df, feature_cols, lookback=12):
 
 def evaluate_lstm_models(eval_df, scaler, speed_model, dir_model, lookback=12):
     # Add sine/cosine encoding for wind direction if not present
-    if "wind_dir_sin" not in eval_df.columns:
+    if "wind_dir_sin" not in eval_df.columns and "forecast_wind_direction" in eval_df.columns:
         eval_df["wind_dir_sin"] = np.sin(np.deg2rad(eval_df["forecast_wind_direction"]))
-    if "wind_dir_cos" not in eval_df.columns:
+    if "wind_dir_cos" not in eval_df.columns and "forecast_wind_direction" in eval_df.columns:
         eval_df["wind_dir_cos"] = np.cos(np.deg2rad(eval_df["forecast_wind_direction"]))
     feature_cols = [col for col in eval_df.columns if col not in ["timestamp", "forecast_wind_speed", "forecast_wind_direction"]]
     # Drop columns with all NaN or only one unique value
@@ -68,6 +68,10 @@ def evaluate_lstm_models(eval_df, scaler, speed_model, dir_model, lookback=12):
     if not feature_cols:
         raise ValueError(f"No valid feature columns for evaluation. Columns: {list(eval_df.columns)}")
     eval_df_scaled = eval_df.copy()
+    # Ensure scaler is fitted for all feature_cols
+    missing_cols = [col for col in feature_cols if col not in scaler.feature_names_in_]
+    if missing_cols:
+        raise ValueError(f"Scaler is missing columns: {missing_cols}. Please retrain the model with consistent features.")
     eval_df_scaled[feature_cols] = scaler.transform(eval_df[feature_cols])
     X = prepare_lstm_input(eval_df_scaled, feature_cols, lookback)
     y_true_speed = eval_df["forecast_wind_speed"].iloc[lookback:].values
