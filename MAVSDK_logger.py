@@ -320,6 +320,8 @@ async def run():
     logging.info(f"Logging options: sql={log_to_sql}, csv={log_to_csv}, tcp={log_to_tcp}")
 
     drone = System()
+    await drone.connect()
+
     tcp_server = None
     logger = None
     weather_sql_logger = None
