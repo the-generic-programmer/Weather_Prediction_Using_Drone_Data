@@ -22,3 +22,13 @@ RSME IS RELATIVELY LOW FOR THIS TRAINED MODEL...
 ///
 
 currently the thing fetches data for london
+
+///
+
+sudo docker run -d -p 3000:3000 \
+  -v /home/aaditya/Desktop/Weather_Prediction_Using_Drone_Data-main/database:/data \
+  --name metabase metabase/metabase
+
+  ///
+
+  

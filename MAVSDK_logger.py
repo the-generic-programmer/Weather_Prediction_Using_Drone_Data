@@ -27,8 +27,8 @@ logging.basicConfig(
     ]
 )
 
-DB_PATH = Path(__file__).parent / "weather_mavsdk_logger.db"
-
+DB_PATH = (Path(__file__).parent / "database/weather_mavsdk_logger.db").resolve()
+print(f"DB_PATH: {DB_PATH}")
 # Makes a directory called mavsdk_logs if it doesn't exist
 LOG_DIR = Path("mavsdk_logs")
 LOG_DIR.mkdir(exist_ok=True)
@@ -168,7 +168,7 @@ class TCPServer:
                 if not self.port:
                     raise OSError(
                         f"No available ports. Please free port 9000 (e.g., 'sudo kill -9 12345' for PID 12345) "
-                        "or configure a different port in config.json. Check processes with: sudo netstat -tulnp | grep 9000"
+                        "or configure a different port in config.json."
                     )
             
             self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -334,269 +334,238 @@ async def run():
         'system_time': {},
         'wind': {}
     }
-    try:
-        if log_to_tcp:
-            logging.info("Initializing TCP server...")
-            tcp_server = TCPServer(port=TCP_PORT)
-            try:
-                tcp_server.start()
-            except OSError as e:
-                logging.error(f"Failed to start TCP server: {e}")
-                logging.error(
-                    f"Port {tcp_server.port} is in use. To free it, run: sudo kill -9 12345\n"
-                    "Check processes with: sudo netstat -tulnp | grep 9000\n"
-                    "Alternatively, edit config.json to use a different port."
-                )
-                raise
 
-        logging.info("Waiting for drone to connect...")
-        connection_timeout = 30
-        start_time = asyncio.get_event_loop().time()
-        async for state in drone.core.connection_state():
-            if state.is_connected:
-                logging.info("Drone connected!")
-                break
-            if asyncio.get_event_loop().time() - start_time > connection_timeout:
-                raise TimeoutError("Drone connection timeout")
-            if shutdown_flag:
-                return
 
-        if log_to_csv:
-            logger = CSVLogger(CSV_FILE)
-            logging.info(f"CSV logger initialized for {CSV_FILE}")
-        if log_to_sql:
-            weather_sql_logger = WeatherSQLiteLogger()
+    def log_all(source, data):
+        row = {**data, 'source': source}
+        if log_to_csv and logger:
+            logger.log(source, data)
+        if log_to_sql and weather_sql_logger:
+            weather_sql_logger.log(row)
 
-        def log_all(source, data):
-            row = {**data, 'source': source}
-            if log_to_csv and logger:
-                logger.log(source, data)
-            if log_to_sql and weather_sql_logger:
-                weather_sql_logger.log(row)
-
-        async def stream_imu():
-            try:
-                async for imu in drone.telemetry.raw_imu():
-                    if shutdown_flag:
-                        break
-                    data = {}
-                    if hasattr(imu, 'angular_velocity_frd'):
-                        ang_vel = imu.angular_velocity_frd
-                        data.update({
-                            "angular_velocity_forward_rad_s": getattr(ang_vel, 'forward_rad_s', None),
-                            "angular_velocity_right_rad_s": getattr(ang_vel, 'right_rad_s', None),
-                            "angular_velocity_down_rad_s": getattr(ang_vel, 'down_rad_s', None)
-                        })
-                    if hasattr(imu, 'linear_acceleration_frd'):
-                        lin_acc = imu.linear_acceleration_frd
-                        data.update({
-                            "linear_acceleration_forward_m_s2": getattr(lin_acc, 'forward_m_s2', None),
-                            "linear_acceleration_right_m_s2": getattr(lin_acc, 'right_m_s2', None),
-                            "linear_acceleration_down_m_s2": getattr(lin_acc, 'down_m_s2', None)
-                        })
-                    if hasattr(imu, 'magnetic_field_frd'):
-                        mag_field = imu.magnetic_field_frd
-                        data.update({
-                            "magnetic_field_forward_gauss": getattr(mag_field, 'forward_gauss', None),
-                            "magnetic_field_right_gauss": getattr(mag_field, 'right_gauss', None),
-                            "magnetic_field_down_gauss": getattr(mag_field, 'down_gauss', None)
-                        })
-                    if hasattr(imu, 'temperature_degc'):
-                        data["temperature_degc"] = getattr(imu, 'temperature_degc', None)
-                    latest_imu.clear()
-                    latest_imu.update(data)
-                    log_all("scaled_imu", data)
-                    latest_topic_data['imu'] = data.copy()
-                    await asyncio.sleep(1 / MAVSDK_STREAM_RATE)
-            except Exception as e:
-                logging.error(f"Error in stream_imu: {e}")
-
-        async def stream_attitude():
-            try:
-                async for att in drone.telemetry.attitude_euler():
-                    if shutdown_flag:
-                        break
-                    data = {
-                        "roll_deg": getattr(att, 'roll_deg', None),
-                        "pitch_deg": getattr(att, 'pitch_deg', None),
-                        "yaw_deg": getattr(att, 'yaw_deg', None),
-                        "timestamp_us": getattr(att, 'timestamp_us', None)
-                    }
-                    latest_attitude.clear()
-                    latest_attitude.update(data)
-                    log_all("attitude", data)
-                    latest_topic_data['attitude'] = data.copy()
-                    await asyncio.sleep(1 / MAVSDK_STREAM_RATE)
-            except Exception as e:
-                logging.error(f"Error in stream_attitude: {e}")
-
-        async def stream_position():
-            try:
-                async for pos in drone.telemetry.position():
-                    if shutdown_flag:
-                        break
-                    data = {
-                        "latitude": getattr(pos, 'latitude_deg', None),
-                        "longitude": getattr(pos, 'longitude_deg', None),
-                        "altitude_from_sealevel": getattr(pos, 'absolute_altitude_m', None),
-                        "relative_altitude": getattr(pos, 'relative_altitude_m', None)
-                    }
-                    data.update(latest_imu)
-                    data.update(latest_attitude)
-                    data = {k: v for k, v in data.items() if v is not None}
-                    log_all("global_position_int", data)
-                    if log_to_sql and weather_sql_logger:
-                        try:
-                            minimal_row = {
-                                "timestamp": datetime.datetime.utcnow().isoformat(),
-                                "latitude": data.get("latitude"),
-                                "longitude": data.get("longitude"),
-                                "altitude_from_sealevel": data.get("altitude_from_sealevel"),
-                                "relative_altitude": data.get("relative_altitude"),
-                                "voltage": latest_topic_data['battery'].get("voltage"),
-                                "remaining_percent": latest_topic_data['battery'].get("remaining_percent"),
-                                "north_m_s": latest_topic_data['velocity'].get("north_m_s"),
-                                "east_m_s": latest_topic_data['velocity'].get("east_m_s"),
-                                "down_m_s": latest_topic_data['velocity'].get("down_m_s"),
-                                "temperature_degc": data.get("temperature_degc"),
-                                "roll_deg": data.get("roll_deg"),
-                                "pitch_deg": data.get("pitch_deg"),
-                                "yaw_deg": data.get("yaw_deg")
-                            }
-                            weather_sql_logger.log(minimal_row)
-                        except Exception as e:
-                            logging.warning(f"SQLite weather log skipped: {e}")
-                    latest_topic_data['position'] = data.copy()
-                    await asyncio.sleep(1 / MAVSDK_STREAM_RATE)
-            except Exception as e:
-                logging.error(f"Error in stream_position: {e}")
-
-        async def stream_battery():
-            try:
-                async for bat in drone.telemetry.battery():
-                    if shutdown_flag:
-                        break
-                    data = {
-                        "voltage": getattr(bat, 'voltage_v', None),
-                        "remaining_percent": getattr(bat, 'remaining_percent', None)
-                    }
-                    data.update(latest_imu)
-                    data.update(latest_attitude)
-                    data = {k: v for k, v in data.items() if v is not None}
-                    log_all("battery_status", data)
-                    latest_topic_data['battery'] = data.copy()
-                    await asyncio.sleep(1 / MAVSDK_STREAM_RATE)
-            except Exception as e:
-                logging.error(f"Error in stream_battery: {e}")
-
-        async def stream_wind():
-            try:
-                async for wind in drone.telemetry.wind():
-                    if shutdown_flag:
-                        break
-                    data = {
-                        "speed_m_s": getattr(wind, 'speed_m_s', None),
-                        "direction_deg": getattr(wind, 'direction_deg', None)
-                    }
-                    data.update(latest_imu)
-                    data.update(latest_attitude)
-                    data = {k: v for k, v in data.items() if v is not None}
-                    log_all("wind", data)
-                    latest_topic_data['wind'] = data.copy()
-                    await asyncio.sleep(1 / MAVSDK_STREAM_RATE)
-            except Exception as e:
-                logging.error(f"Error in stream_wind: {e}")
-
-        async def stream_velocity():
-            try:
-                async for vel in drone.telemetry.velocity_ned():
-                    if shutdown_flag:
-                        break
-                    data = {
-                        "north_m_s": getattr(vel, 'north_m_s', None),
-                        "east_m_s": getattr(vel, 'east_m_s', None),
-                        "down_m_s": getattr(vel, 'down_m_s', None)
-                    }
-                    data.update(latest_imu)
-                    data.update(latest_attitude)
-                    data = {k: v for k, v in data.items() if v is not None}
-                    log_all("velocity", data)
-                    latest_topic_data['velocity'] = data.copy()
-                    await asyncio.sleep(1 / MAVSDK_STREAM_RATE)
-            except Exception as e:
-                logging.error(f"Error in stream_velocity: {e}")
-
-        async def stream_system_time():
-            try:
-                while not shutdown_flag:
-                    data = {
-                        "system_time": datetime.datetime.utcnow().isoformat(timespec='milliseconds') + 'Z',
-                        "unix_time": datetime.datetime.utcnow().timestamp()
-                    }
-                    data.update(latest_imu)
-                    data.update(latest_attitude)
-                    data = {k: v for k, v in data.items() if v is not None}
-                    log_all("system_time", data)
-                    latest_topic_data['system_time'] = data.copy()
-                    await asyncio.sleep(1 / MAVSDK_STREAM_RATE)
-            except Exception as e:
-                logging.error(f"Error in stream_system_time: {e}")
-
-        async def tcp_publisher():
-            if not log_to_tcp or not tcp_server:
-                return
-            try:
-                from copy import deepcopy
-                while not shutdown_flag:
-                    combined = {}
-                    for topic_data in latest_topic_data.values():
-                        combined.update(topic_data)
-                    if combined:
-                        row = {field: combined.get(field, '') for field in CSVLogger.FIXED_FIELDS}
-                        tcp_server.send(row)
-                    await asyncio.sleep(1 / TCP_STREAM_RATE)
-            except Exception as e:
-                logging.error(f"Error in tcp_publisher: {e}")
-
-        async def periodic_flush():
-            if not log_to_csv or not logger:
-                return
-            try:
-                while not shutdown_flag:
-                    logger.flush()
-                    await asyncio.sleep(5)
-            except Exception as e:
-                logging.error(f"Error in periodic_flush: {e}")
-
-        async def monitor_connection():
-            try:
-                async for state in drone.core.connection_state():
-                    if not state.is_connected:
-                        logging.info("Drone disconnected!")
-                        break
-                    if shutdown_flag:
-                        break
-            except Exception as e:
-                logging.error(f"Error monitoring connection: {e}")
-
-        logging.info("Logging started. Press Ctrl+C to stop.")
-        tasks = [
-            asyncio.create_task(stream_position()),
-            asyncio.create_task(stream_battery()),
-            asyncio.create_task(stream_imu()),
-            asyncio.create_task(stream_velocity()),
-            asyncio.create_task(stream_attitude()),
-            asyncio.create_task(stream_system_time()),
-            asyncio.create_task(periodic_flush()),
-            asyncio.create_task(monitor_connection()),
-            asyncio.create_task(stream_wind()),
-        ]
-        if log_to_tcp and tcp_server:
-            tasks.append(asyncio.create_task(tcp_publisher()))
+    async def stream_imu():
         try:
-            await asyncio.gather(*tasks, return_exceptions=True)
-        except asyncio.CancelledError:
-            logging.info("Tasks cancelled")
+            async for imu in drone.telemetry.raw_imu():
+                if shutdown_flag:
+                    break
+                data = {}
+                if hasattr(imu, 'angular_velocity_frd'):
+                    ang_vel = imu.angular_velocity_frd
+                    data.update({
+                        "angular_velocity_forward_rad_s": getattr(ang_vel, 'forward_rad_s', None),
+                        "angular_velocity_right_rad_s": getattr(ang_vel, 'right_rad_s', None),
+                        "angular_velocity_down_rad_s": getattr(ang_vel, 'down_rad_s', None)
+                    })
+                if hasattr(imu, 'linear_acceleration_frd'):
+                    lin_acc = imu.linear_acceleration_frd
+                    data.update({
+                        "linear_acceleration_forward_m_s2": getattr(lin_acc, 'forward_m_s2', None),
+                        "linear_acceleration_right_m_s2": getattr(lin_acc, 'right_m_s2', None),
+                        "linear_acceleration_down_m_s2": getattr(lin_acc, 'down_m_s2', None)
+                    })
+                if hasattr(imu, 'magnetic_field_frd'):
+                    mag_field = imu.magnetic_field_frd
+                    data.update({
+                        "magnetic_field_forward_gauss": getattr(mag_field, 'forward_gauss', None),
+                        "magnetic_field_right_gauss": getattr(mag_field, 'right_gauss', None),
+                        "magnetic_field_down_gauss": getattr(mag_field, 'down_gauss', None)
+                    })
+                if hasattr(imu, 'temperature_degc'):
+                    data["temperature_degc"] = getattr(imu, 'temperature_degc', None)
+                latest_imu.clear()
+                latest_imu.update(data)
+                log_all("scaled_imu", data)
+                latest_topic_data['imu'] = data.copy()
+                await asyncio.sleep(1 / MAVSDK_STREAM_RATE)
+        except Exception as e:
+            logging.error(f"Error in stream_imu: {e}")
+
+    async def stream_attitude():
+        try:
+            async for att in drone.telemetry.attitude_euler():
+                if shutdown_flag:
+                    break
+                data = {
+                    "roll_deg": getattr(att, 'roll_deg', None),
+                    "pitch_deg": getattr(att, 'pitch_deg', None),
+                    "yaw_deg": getattr(att, 'yaw_deg', None),
+                    "timestamp_us": getattr(att, 'timestamp_us', None)
+                }
+                latest_attitude.clear()
+                latest_attitude.update(data)
+                log_all("attitude", data)
+                latest_topic_data['attitude'] = data.copy()
+                await asyncio.sleep(1 / MAVSDK_STREAM_RATE)
+        except Exception as e:
+            logging.error(f"Error in stream_attitude: {e}")
+
+    async def stream_position():
+        try:
+            async for pos in drone.telemetry.position():
+                if shutdown_flag:
+                    break
+                data = {
+                    "latitude": getattr(pos, 'latitude_deg', None),
+                    "longitude": getattr(pos, 'longitude_deg', None),
+                    "altitude_from_sealevel": getattr(pos, 'absolute_altitude_m', None),
+                    "relative_altitude": getattr(pos, 'relative_altitude_m', None)
+                }
+                data.update(latest_imu)
+                data.update(latest_attitude)
+                data = {k: v for k, v in data.items() if v is not None}
+                log_all("global_position_int", data)
+                if log_to_sql and weather_sql_logger:
+                    try:
+                        minimal_row = {
+                            "timestamp": datetime.datetime.utcnow().isoformat(),
+                            "latitude": data.get("latitude"),
+                            "longitude": data.get("longitude"),
+                            "altitude_from_sealevel": data.get("altitude_from_sealevel"),
+                            "relative_altitude": data.get("relative_altitude"),
+                            "voltage": latest_topic_data['battery'].get("voltage"),
+                            "remaining_percent": latest_topic_data['battery'].get("remaining_percent"),
+                            "north_m_s": latest_topic_data['velocity'].get("north_m_s"),
+                            "east_m_s": latest_topic_data['velocity'].get("east_m_s"),
+                            "down_m_s": latest_topic_data['velocity'].get("down_m_s"),
+                            "temperature_degc": data.get("temperature_degc"),
+                            "roll_deg": data.get("roll_deg"),
+                            "pitch_deg": data.get("pitch_deg"),
+                            "yaw_deg": data.get("yaw_deg")
+                        }
+                        weather_sql_logger.log(minimal_row)
+                    except Exception as e:
+                        logging.warning(f"SQLite weather log skipped: {e}")
+                latest_topic_data['position'] = data.copy()
+                await asyncio.sleep(1 / MAVSDK_STREAM_RATE)
+        except Exception as e:
+            logging.error(f"Error in stream_position: {e}")
+
+    async def stream_battery():
+        try:
+            async for bat in drone.telemetry.battery():
+                if shutdown_flag:
+                    break
+                data = {
+                    "voltage": getattr(bat, 'voltage_v', None),
+                    "remaining_percent": getattr(bat, 'remaining_percent', None)
+                }
+                data.update(latest_imu)
+                data.update(latest_attitude)
+                data = {k: v for k, v in data.items() if v is not None}
+                log_all("battery_status", data)
+                latest_topic_data['battery'] = data.copy()
+                await asyncio.sleep(1 / MAVSDK_STREAM_RATE)
+        except Exception as e:
+            logging.error(f"Error in stream_battery: {e}")
+
+    async def stream_wind():
+        try:
+            async for wind in drone.telemetry.wind():
+                if shutdown_flag:
+                    break
+                data = {
+                    "speed_m_s": getattr(wind, 'speed_m_s', None),
+                    "direction_deg": getattr(wind, 'direction_deg', None)
+                }
+                data.update(latest_imu)
+                data.update(latest_attitude)
+                data = {k: v for k, v in data.items() if v is not None}
+                log_all("wind", data)
+                latest_topic_data['wind'] = data.copy()
+                await asyncio.sleep(1 / MAVSDK_STREAM_RATE)
+        except Exception as e:
+            logging.error(f"Error in stream_wind: {e}")
+
+    async def stream_velocity():
+        try:
+            async for vel in drone.telemetry.velocity_ned():
+                if shutdown_flag:
+                    break
+                data = {
+                    "north_m_s": getattr(vel, 'north_m_s', None),
+                    "east_m_s": getattr(vel, 'east_m_s', None),
+                    "down_m_s": getattr(vel, 'down_m_s', None)
+                }
+                data.update(latest_imu)
+                data.update(latest_attitude)
+                data = {k: v for k, v in data.items() if v is not None}
+                log_all("velocity", data)
+                latest_topic_data['velocity'] = data.copy()
+                await asyncio.sleep(1 / MAVSDK_STREAM_RATE)
+        except Exception as e:
+            logging.error(f"Error in stream_velocity: {e}")
+
+    async def stream_system_time():
+        try:
+            while not shutdown_flag:
+                data = {
+                    "system_time": datetime.datetime.utcnow().isoformat(timespec='milliseconds') + 'Z',
+                    "unix_time": datetime.datetime.utcnow().timestamp()
+                }
+                data.update(latest_imu)
+                data.update(latest_attitude)
+                data = {k: v for k, v in data.items() if v is not None}
+                log_all("system_time", data)
+                latest_topic_data['system_time'] = data.copy()
+                await asyncio.sleep(1 / MAVSDK_STREAM_RATE)
+        except Exception as e:
+            logging.error(f"Error in stream_system_time: {e}")
+
+    async def tcp_publisher():
+        if not log_to_tcp or not tcp_server:
+            return
+        try:
+            from copy import deepcopy
+            while not shutdown_flag:
+                combined = {}
+                for topic_data in latest_topic_data.values():
+                    combined.update(topic_data)
+                if combined:
+                    row = {field: combined.get(field, '') for field in CSVLogger.FIXED_FIELDS}
+                    tcp_server.send(row)
+                await asyncio.sleep(1 / TCP_STREAM_RATE)
+        except Exception as e:
+            logging.error(f"Error in tcp_publisher: {e}")
+
+    async def periodic_flush():
+        if not log_to_csv or not logger:
+            return
+        try:
+            while not shutdown_flag:
+                logger.flush()
+                await asyncio.sleep(5)
+        except Exception as e:
+            logging.error(f"Error in periodic_flush: {e}")
+
+    async def monitor_connection():
+        try:
+            async for state in drone.core.connection_state():
+                if not state.is_connected:
+                    logging.info("Drone disconnected!")
+                    break
+                if shutdown_flag:
+                    break
+        except Exception as e:
+            logging.error(f"Error monitoring connection: {e}")
+
+    logging.info("Logging started. Press Ctrl+C to stop.")
+    tasks = [
+        asyncio.create_task(stream_position()),
+        asyncio.create_task(stream_battery()),
+        asyncio.create_task(stream_imu()),
+        asyncio.create_task(stream_velocity()),
+        asyncio.create_task(stream_attitude()),
+        asyncio.create_task(stream_system_time()),
+        asyncio.create_task(periodic_flush()),
+        asyncio.create_task(monitor_connection()),
+        asyncio.create_task(stream_wind()),
+    ]
+    if log_to_tcp and tcp_server:
+        tasks.append(asyncio.create_task(tcp_publisher()))
+    try:
+        await asyncio.gather(*tasks, return_exceptions=True)
+    except asyncio.CancelledError:
+        logging.info("Tasks cancelled")
     except Exception as e:
         logging.error(f"Error in main loop: {e}")
         logging.error(traceback.format_exc())

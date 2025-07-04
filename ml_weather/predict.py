@@ -25,7 +25,7 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 
-DB_PATH = os.path.join(os.path.dirname(__file__), '..', 'weather_predict.db')
+DB_PATH = os.path.join(os.path.dirname(__file__), '..', 'database', 'weather_predict.db')
 EXPECTED_COORDS = (13.0, 77.625)
 tf = TimezoneFinder()
 geolocator = Nominatim(user_agent="weather_predictor")

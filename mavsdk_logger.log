@@ -910,3 +910,106 @@
 [2025-07-03 18:02:07] INFO: CSV data flushed to mavsdk_logs/drone_log_20250703_120218.csv
 [2025-07-03 18:02:12] INFO: CSV data flushed to mavsdk_logs/drone_log_20250703_120218.csv
 [2025-07-03 18:02:17] INFO: CSV data flushed to mavsdk_logs/drone_log_20250703_120218.csv
+[2025-07-04 10:34:38] INFO: Starting MAVSDK logger...
+[2025-07-04 10:34:38] INFO: Table weather_logs created or exists (SQLite)
+[2025-07-04 10:34:38] INFO: WeatherSQLiteLogger connection closed
+[2025-07-04 10:49:47] INFO: Starting MAVSDK logger...
+[2025-07-04 10:49:47] ERROR: SQLite setup failed: unable to open database file
+[2025-07-04 10:49:47] ERROR: Failed to initialize databases: unable to open database file
+[2025-07-04 10:49:47] ERROR: Fatal error: unable to open database file
+[2025-07-04 10:49:47] ERROR: Traceback (most recent call last):
+  File "/home/aaditya/Desktop/Weather_Prediction_Using_Drone_Data-main/MAVSDK_logger.py", line 623, in <module>
+    initialize_databases()
+  File "/home/aaditya/Desktop/Weather_Prediction_Using_Drone_Data-main/MAVSDK_logger.py", line 304, in initialize_databases
+    weather_sql_logger = WeatherSQLiteLogger()
+  File "/home/aaditya/Desktop/Weather_Prediction_Using_Drone_Data-main/MAVSDK_logger.py", line 94, in __init__
+    self._setup()
+  File "/home/aaditya/Desktop/Weather_Prediction_Using_Drone_Data-main/MAVSDK_logger.py", line 98, in _setup
+    self.conn = sqlite3.connect(self.db_path)
+sqlite3.OperationalError: unable to open database file
+
+[2025-07-04 10:49:47] INFO: Logger shutdown complete.
+[2025-07-04 11:08:59] INFO: Starting MAVSDK logger...
+[2025-07-04 11:08:59] ERROR: SQLite setup failed: unable to open database file
+[2025-07-04 11:08:59] ERROR: Failed to initialize databases: unable to open database file
+[2025-07-04 11:08:59] ERROR: Fatal error: unable to open database file
+[2025-07-04 11:08:59] ERROR: Traceback (most recent call last):
+  File "/home/aaditya/Desktop/Weather_Prediction_Using_Drone_Data-main/MAVSDK_logger.py", line 592, in <module>
+    initialize_databases()
+  File "/home/aaditya/Desktop/Weather_Prediction_Using_Drone_Data-main/MAVSDK_logger.py", line 304, in initialize_databases
+    weather_sql_logger = WeatherSQLiteLogger()
+  File "/home/aaditya/Desktop/Weather_Prediction_Using_Drone_Data-main/MAVSDK_logger.py", line 94, in __init__
+    self._setup()
+  File "/home/aaditya/Desktop/Weather_Prediction_Using_Drone_Data-main/MAVSDK_logger.py", line 98, in _setup
+    self.conn = sqlite3.connect(self.db_path)
+sqlite3.OperationalError: unable to open database file
+
+[2025-07-04 11:08:59] INFO: Logger shutdown complete.
+[2025-07-04 11:09:04] INFO: Starting MAVSDK logger...
+[2025-07-04 11:09:04] ERROR: SQLite setup failed: unable to open database file
+[2025-07-04 11:09:04] ERROR: Failed to initialize databases: unable to open database file
+[2025-07-04 11:09:04] ERROR: Fatal error: unable to open database file
+[2025-07-04 11:09:04] ERROR: Traceback (most recent call last):
+  File "/home/aaditya/Desktop/Weather_Prediction_Using_Drone_Data-main/MAVSDK_logger.py", line 592, in <module>
+    initialize_databases()
+  File "/home/aaditya/Desktop/Weather_Prediction_Using_Drone_Data-main/MAVSDK_logger.py", line 304, in initialize_databases
+    weather_sql_logger = WeatherSQLiteLogger()
+  File "/home/aaditya/Desktop/Weather_Prediction_Using_Drone_Data-main/MAVSDK_logger.py", line 94, in __init__
+    self._setup()
+  File "/home/aaditya/Desktop/Weather_Prediction_Using_Drone_Data-main/MAVSDK_logger.py", line 98, in _setup
+    self.conn = sqlite3.connect(self.db_path)
+sqlite3.OperationalError: unable to open database file
+
+[2025-07-04 11:09:04] INFO: Logger shutdown complete.
+[2025-07-04 11:14:17] INFO: Starting MAVSDK logger...
+[2025-07-04 11:14:17] ERROR: SQLite setup failed: unable to open database file
+[2025-07-04 11:14:17] ERROR: Failed to initialize databases: unable to open database file
+[2025-07-04 11:14:17] ERROR: Fatal error: unable to open database file
+[2025-07-04 11:14:17] ERROR: Traceback (most recent call last):
+  File "/home/aaditya/Desktop/Weather_Prediction_Using_Drone_Data-main/MAVSDK_logger.py", line 592, in <module>
+    initialize_databases()
+  File "/home/aaditya/Desktop/Weather_Prediction_Using_Drone_Data-main/MAVSDK_logger.py", line 304, in initialize_databases
+    weather_sql_logger = WeatherSQLiteLogger()
+  File "/home/aaditya/Desktop/Weather_Prediction_Using_Drone_Data-main/MAVSDK_logger.py", line 94, in __init__
+    self._setup()
+  File "/home/aaditya/Desktop/Weather_Prediction_Using_Drone_Data-main/MAVSDK_logger.py", line 98, in _setup
+    self.conn = sqlite3.connect(self.db_path)
+sqlite3.OperationalError: unable to open database file
+
+[2025-07-04 11:14:17] INFO: Logger shutdown complete.
+[2025-07-04 11:14:35] INFO: Starting MAVSDK logger...
+[2025-07-04 11:14:35] ERROR: SQLite setup failed: unable to open database file
+[2025-07-04 11:14:35] ERROR: Failed to initialize databases: unable to open database file
+[2025-07-04 11:14:35] ERROR: Fatal error: unable to open database file
+[2025-07-04 11:14:35] ERROR: Traceback (most recent call last):
+  File "/home/aaditya/Desktop/Weather_Prediction_Using_Drone_Data-main/MAVSDK_logger.py", line 592, in <module>
+    initialize_databases()
+  File "/home/aaditya/Desktop/Weather_Prediction_Using_Drone_Data-main/MAVSDK_logger.py", line 304, in initialize_databases
+    weather_sql_logger = WeatherSQLiteLogger()
+  File "/home/aaditya/Desktop/Weather_Prediction_Using_Drone_Data-main/MAVSDK_logger.py", line 94, in __init__
+    self._setup()
+  File "/home/aaditya/Desktop/Weather_Prediction_Using_Drone_Data-main/MAVSDK_logger.py", line 98, in _setup
+    self.conn = sqlite3.connect(self.db_path)
+sqlite3.OperationalError: unable to open database file
+
+[2025-07-04 11:14:35] INFO: Logger shutdown complete.
+[2025-07-04 11:14:36] INFO: Starting MAVSDK logger...
+[2025-07-04 11:14:36] ERROR: SQLite setup failed: unable to open database file
+[2025-07-04 11:14:36] ERROR: Failed to initialize databases: unable to open database file
+[2025-07-04 11:14:36] ERROR: Fatal error: unable to open database file
+[2025-07-04 11:14:36] ERROR: Traceback (most recent call last):
+  File "/home/aaditya/Desktop/Weather_Prediction_Using_Drone_Data-main/MAVSDK_logger.py", line 592, in <module>
+    initialize_databases()
+  File "/home/aaditya/Desktop/Weather_Prediction_Using_Drone_Data-main/MAVSDK_logger.py", line 304, in initialize_databases
+    weather_sql_logger = WeatherSQLiteLogger()
+  File "/home/aaditya/Desktop/Weather_Prediction_Using_Drone_Data-main/MAVSDK_logger.py", line 94, in __init__
+    self._setup()
+  File "/home/aaditya/Desktop/Weather_Prediction_Using_Drone_Data-main/MAVSDK_logger.py", line 98, in _setup
+    self.conn = sqlite3.connect(self.db_path)
+sqlite3.OperationalError: unable to open database file
+
+[2025-07-04 11:14:36] INFO: Logger shutdown complete.
+[2025-07-04 11:15:37] INFO: Starting MAVSDK logger...
+[2025-07-04 11:15:37] INFO: Table weather_logs created or exists (SQLite)
+[2025-07-04 11:15:37] INFO: WeatherSQLiteLogger connection closed
+[2025-07-04 11:15:41] INFO: Shutdown signal received...
