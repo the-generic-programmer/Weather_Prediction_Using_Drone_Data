@@ -10,14 +10,13 @@ import requests
 import sys
 import time
 import logging
+import sqlite3
 from datetime import datetime
 from astral import LocationInfo
 from astral.sun import sun
 from timezonefinder import TimezoneFinder
 from geopy.geocoders import Nominatim
 import pytz
-import mysql.connector
-from mysql.connector import Error
 
 # Configure logging
 logging.basicConfig(
@@ -26,39 +25,27 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 
-def initialize_database():
-    """Initialize the weather_predict database at script start."""
-    try:
-        temp_config = {
-            'host': 'localhost',
-            'user': 'root',
-            'password': 'Root@123'
-        }
-        conn = mysql.connector.connect(**temp_config)
-        cursor = conn.cursor()
-        cursor.execute("CREATE DATABASE IF NOT EXISTS weather_predict")
-        conn.commit()
-        cursor.close()
-        conn.close()
-        logging.info("Database weather_predict created or exists")
+DB_PATH = os.path.join(os.path.dirname(__file__), '..', 'weather_predict.db')
+EXPECTED_COORDS = (13.0, 77.625)
+tf = TimezoneFinder()
+geolocator = Nominatim(user_agent="weather_predictor")
 
-        # Create predictions table
-        conn = mysql.connector.connect(
-            host='localhost',
-            user='root',
-            password='Root@123',
-            database='weather_predict'
-        )
+def safe(val):
+    return None if pd.isnull(val) or str(val).lower() in ("nan", "none", "") else val
+
+def initialize_database():
+    try:
+        conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS predictions (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                timestamp DATETIME,
-                predicted_temperature FLOAT,
-                humidity FLOAT,
-                wind_speed FLOAT,
-                wind_direction FLOAT,
-                confidence_range FLOAT,
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT,
+                predicted_temperature REAL,
+                humidity REAL,
+                wind_speed REAL,
+                wind_direction REAL,
+                confidence_range REAL,
                 humidity_timestamp TEXT,
                 sunrise_drone TEXT,
                 sunset_drone TEXT,
@@ -68,38 +55,31 @@ def initialize_database():
                 humidity_source TEXT,
                 location TEXT,
                 warning TEXT,
-                rain_chance_2h FLOAT,
-                cloud_cover FLOAT
+                rain_chance_2h REAL,
+                cloud_cover REAL
             )
         ''')
         conn.commit()
         cursor.close()
         conn.close()
-        logging.info("Table predictions created or exists")
-    except Error as e:
-        logging.error(f"Failed to initialize database weather_predict: {e}")
+        logging.info("SQLite database and table created or exists")
+    except Exception as e:
+        logging.error(f"Failed to initialize SQLite database: {e}")
         raise
 
-# Define database logging function
 def log_prediction_to_db(result):
     try:
-        conn = mysql.connector.connect(
-            host='localhost',
-            user='root',
-            password='Root@123',
-            database='weather_predict'
-        )
+        conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-
         ts = result.get("timestamp")
         if ts:
             try:
                 ts = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%S")
+                ts = ts.strftime("%Y-%m-%dT%H:%M:%S")
             except ValueError:
-                ts = datetime.utcnow()
+                ts = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
         else:
-            ts = datetime.utcnow()
-
+            ts = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
         wind_speed = np.sqrt(
             (safe(result['input'].get('north_m_s', 0)) or 0) ** 2 +
             (safe(result['input'].get('east_m_s', 0)) or 0) ** 2
@@ -111,7 +91,6 @@ def log_prediction_to_db(result):
             )) % 360
             if safe(result['input'].get('north_m_s')) is not None else 0
         )
-
         values = (
             ts,
             safe(result.get('predicted_temperature')),
@@ -131,7 +110,6 @@ def log_prediction_to_db(result):
             safe(result.get('rain_chance_2h (%)')),
             safe(result.get('cloud_cover (%)'))
         )
-
         cursor.execute('''
             INSERT INTO predictions (
                 timestamp, predicted_temperature, humidity,
@@ -140,15 +118,14 @@ def log_prediction_to_db(result):
                 sunrise_user, sunset_user, info,
                 humidity_source, location, warning,
                 rain_chance_2h, cloud_cover
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', values)
-
         conn.commit()
         cursor.close()
         conn.close()
-        logging.info("Prediction logged to database")
-    except Error as e:
-        logging.error(f"Database Error: {e}")
+        logging.info("Prediction logged to SQLite database")
+    except Exception as e:
+        logging.error(f"SQLite DB Error: {e}")
 
 MODEL_DIR = "models"
 EXPECTED_COORDS = (13.0, 77.625)
@@ -461,4 +438,3 @@ if __name__ == "__main__":
     except Exception as e:
         logging.error(f"Fatal error: {e}")
         sys.exit(1)
-        

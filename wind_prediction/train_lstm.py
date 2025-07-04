@@ -1,11 +1,24 @@
-import os
 import sys
+import os
+import warnings
+
+# Suppress TensorFlow oneDNN and CUDA warnings for cleaner output
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from ml_weather.fetch_meteostat_hourly import fetch_meteostat_hourly
+
 import logging
 import joblib
 import numpy as np
 import pandas as pd
 import argparse
 import random
+import socket
+import time
+import json
+from datetime import datetime, timedelta
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from tensorflow.keras.models import Sequential
@@ -91,33 +104,88 @@ def train_and_save_model(X, y, input_shape, model_path, epochs=100, batch_size=3
     )
     return model, history
 
+def get_latest_drone_gps_from_tcp(host='127.0.0.1', port=9000, timeout=30):
+    """Connect to MAVSDK logger TCP and get the latest GPS coordinates."""
+    start = time.time()
+    while time.time() - start < timeout:
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(5)
+                s.connect((host, port))
+                data = s.recv(4096)
+                if not data:
+                    continue
+                for line in data.decode(errors='ignore').split('\n'):
+                    if not line.strip():
+                        continue
+                    try:
+                        msg = json.loads(line)
+                        lat = msg.get('latitude')
+                        lon = msg.get('longitude')
+                        if lat is not None and lon is not None:
+                            return float(lat), float(lon)
+                    except Exception:
+                        continue
+        except Exception:
+            time.sleep(2)
+    raise RuntimeError("Could not get GPS from MAVSDK logger TCP.")
+
 def main():
     parser = argparse.ArgumentParser(description="Train LSTM models for wind speed and direction prediction.")
     parser.add_argument('--lookback', type=int, default=24, help='Lookback window for LSTM')
     parser.add_argument('--epochs', type=int, default=100, help='Number of training epochs')
     parser.add_argument('--batch_size', type=int, default=32, help='Batch size for training')
+    parser.add_argument('--meteostat_csv', type=str, default=None, help='Path to Meteostat CSV for training (optional)')
+    parser.add_argument('--use_meteostat_from_drone', action='store_true', help='Fetch Meteostat data using latest drone GPS from MAVSDK logger TCP')
+    parser.add_argument('--years', type=int, default=5, help='Number of years of Meteostat data to fetch if using drone GPS')
+    parser.add_argument('--tcp_port', type=int, default=9000, help='TCP port for MAVSDK logger')
     args = parser.parse_args()
 
-    data_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data"))
-    os.makedirs(data_dir, exist_ok=True)
-
-    print("Select data source for training:")
-    print("1. Open-Meteo")
-    print("2. NOAA GFS")
-    choice = input("Enter 1 or 2: ").strip()
-
-    if choice == "2":
-        gfs_files = [f for f in os.listdir(data_dir) if f.startswith("gfs_wind_") and f.endswith(".csv")]
-        gfs_files.sort(reverse=True)
-        if not gfs_files:
-            sys.exit("No GFS data found.")
-        data_path = os.path.join(data_dir, gfs_files[0])
+    if args.use_meteostat_from_drone:
+        print("Connecting to MAVSDK logger TCP to get latest drone GPS...")
+        lat, lon = get_latest_drone_gps_from_tcp(port=args.tcp_port)
+        print(f"Got drone GPS: lat={lat}, lon={lon}")
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=365 * args.years)
+        output_csv = f"data/meteostat_{lat}_{lon}_{start_date.strftime('%Y%m%d')}_{end_date.strftime('%Y%m%d')}.csv"
+        fetch_meteostat_hourly(lat, lon, start_date, end_date, output_csv)
+        data_path = output_csv
+        print(f"Using Meteostat data: {data_path}")
+    elif args.meteostat_csv:
+        data_path = args.meteostat_csv
+        print(f"Using Meteostat data: {data_path}")
     else:
-        forecast_files = [f for f in os.listdir(data_dir) if f.startswith("openmeteo_forecast_") and f.endswith("_train.csv")]
-        forecast_files.sort(reverse=True)
-        data_path = os.path.join(data_dir, forecast_files[0]) if forecast_files else os.path.join(data_dir, "historical_weather.csv")
-        if not os.path.exists(data_path):
-            sys.exit(f"No forecast data found at {data_path}.")
+        data_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data"))
+        os.makedirs(data_dir, exist_ok=True)
+        print("Select data source for training:")
+        print("1. Open-Meteo")
+        print("2. NOAA GFS")
+        print("3. Meteostat (manual location)")
+        choice = input("Enter 1, 2, or 3: ").strip()
+        if choice == "2":
+            gfs_files = [f for f in os.listdir(data_dir) if f.startswith("gfs_wind_") and f.endswith(".csv")]
+            gfs_files.sort(reverse=True)
+            if not gfs_files:
+                sys.exit("No GFS data found.")
+            data_path = os.path.join(data_dir, gfs_files[0])
+        elif choice == "3":
+            lat = float(input("Enter latitude: ").strip())
+            lon = float(input("Enter longitude: ").strip())
+            years = int(input("How many years of data? (default 5): ").strip() or 5)
+            end_date = datetime.now()
+            start_date = end_date - timedelta(days=365 * years)
+            output_csv = os.path.join(data_dir, f"meteostat_{lat}_{lon}_{start_date.strftime('%Y%m%d')}_{end_date.strftime('%Y%m%d')}.csv")
+            success = fetch_meteostat_hourly(lat, lon, start_date, end_date, output_csv)
+            if not success or not os.path.exists(output_csv):
+                sys.exit(f"No Meteostat data available for {lat},{lon}. Training aborted.")
+            data_path = output_csv
+            print(f"Using Meteostat data: {data_path}")
+        else:
+            forecast_files = [f for f in os.listdir(data_dir) if f.startswith("openmeteo_forecast_") and f.endswith("_train.csv")]
+            forecast_files.sort(reverse=True)
+            data_path = os.path.join(data_dir, forecast_files[0]) if forecast_files else os.path.join(data_dir, "historical_weather.csv")
+            if not os.path.exists(data_path):
+                sys.exit(f"No forecast data found at {data_path}.")
 
     logging.info(f"Loading data from {data_path}")
     df = pd.read_csv(data_path)

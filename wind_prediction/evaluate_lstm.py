@@ -7,41 +7,27 @@ from sklearn.metrics import mean_squared_error, r2_score
 from sklearn.preprocessing import StandardScaler
 import requests
 from datetime import datetime, timedelta
+from meteostat import Hourly, Point
 
-def fetch_openmeteo_eval_data(lat, lon, hours_ahead=24):
+def fetch_meteostat_eval_data(lat, lon, hours_ahead=24):
     now = datetime.utcnow()
     end_time = now + timedelta(hours=hours_ahead)
-    start_date = now.strftime("%Y-%m-%d")
-    end_date = end_time.strftime("%Y-%m-%d")
-    url = (
-        f"https://api.open-meteo.com/v1/ecmwf?"
-        f"latitude={lat}&longitude={lon}"
-        f"&hourly=windspeed_10m,winddirection_10m,temperature_2m,relative_humidity_2m,pressure_msl,cloudcover,precipitation,weathercode"
-        f"&start_date={start_date}&end_date={end_date}&timezone=UTC"
-    )
-    resp = requests.get(url, timeout=10)
-    data = resp.json()
-    if "hourly" not in data:
-        raise ValueError("Unexpected forecast response format.")
-    time_series = data["hourly"]["time"]
-    speeds = data["hourly"]["windspeed_10m"]
-    directions = data["hourly"]["winddirection_10m"]
-    temp = data["hourly"].get("temperature_2m", [None]*len(time_series))
-    rh = data["hourly"].get("relative_humidity_2m", [None]*len(time_series))
-    pressure = data["hourly"].get("pressure_msl", [None]*len(time_series))
-    cloud = data["hourly"].get("cloudcover", [None]*len(time_series))
-    precip = data["hourly"].get("precipitation", [None]*len(time_series))
-    wcode = data["hourly"].get("weathercode", [None]*len(time_series))
-    df = pd.DataFrame({
-        "timestamp": pd.to_datetime(time_series),
-        "forecast_wind_speed": speeds,
-        "forecast_wind_direction": directions,
-        "temperature_2m": temp,
-        "relative_humidity_2m": rh,
-        "pressure_msl": pressure,
-        "cloudcover": cloud,
-        "precipitation": precip,
-        "weathercode": wcode
+    location = Point(lat, lon)
+    data = Hourly(location, now, end_time)
+    df = data.fetch().reset_index()
+    if df.empty:
+        raise ValueError("No Meteostat data available for the given location/time.")
+    # Standardize column names to match expected format
+    df = df.rename(columns={
+        'time': 'timestamp',
+        'wspd': 'forecast_wind_speed',
+        'wdir': 'forecast_wind_direction',
+        'temp': 'temperature_2m',
+        'rhum': 'relative_humidity_2m',
+        'pres': 'pressure_msl',
+        'coco': 'weathercode',
+        'prcp': 'precipitation',
+        'cldc': 'cloudcover'
     })
     # Add sine/cosine encoding for wind direction
     df["wind_dir_sin"] = np.sin(np.deg2rad(df["forecast_wind_direction"]))
@@ -97,7 +83,7 @@ def evaluate_lstm_models(eval_df, scaler, speed_model, dir_model, lookback=12):
 if __name__ == "__main__":
     # Example: London
     lat, lon = 51.5074, -0.1278
-    eval_df = fetch_openmeteo_eval_data(lat, lon, hours_ahead=48)
+    eval_df = fetch_meteostat_eval_data(lat, lon, hours_ahead=48)
     model_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "models"))
     scaler_path = os.path.join(model_dir, "wind_scaler.joblib")
     speed_model_path = os.path.join(model_dir, "wind_speed_lstm.h5")

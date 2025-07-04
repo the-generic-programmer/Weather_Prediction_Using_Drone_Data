@@ -3,7 +3,6 @@
 import warnings
 import logging
 import asyncio
-from mavsdk import System
 import csv
 import json
 import socket
@@ -14,8 +13,8 @@ import traceback
 import signal
 import sys
 from typing import Optional, Dict, Any
-import mysql.connector
-from mysql.connector import Error
+import sqlite3
+from mavsdk import System
 
 # Configure logging
 logging.basicConfig(
@@ -28,13 +27,7 @@ logging.basicConfig(
     ]
 )
 
-# Load configuration
-CONFIG_FILE = Path("config.json")
-if not CONFIG_FILE.exists():
-    logging.error("Configuration file config.json not found. Run setup_mysql.py first.")
-    sys.exit(1)
-with open(CONFIG_FILE, 'r') as f:
-    CONFIG = json.load(f)
+DB_PATH = Path(__file__).parent / "weather_mavsdk_logger.db"
 
 # Makes a directory called mavsdk_logs if it doesn't exist
 LOG_DIR = Path("mavsdk_logs")
@@ -42,7 +35,7 @@ LOG_DIR.mkdir(exist_ok=True)
 CSV_FILE = LOG_DIR / f"drone_log_{datetime.datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
 
 # TCP config
-TCP_PORT = CONFIG.get('tcp_port', 9000)
+TCP_PORT = 9000
 MAVSDK_STREAM_RATE = 20.0  # Hz
 TCP_STREAM_RATE = 5.0  # Hz
 shutdown_flag = False
@@ -87,10 +80,9 @@ def prompt_for_port() -> Optional[int]:
         logging.error("Invalid port number entered")
         return None
 
-class WeatherMySQLLogger:
+class WeatherSQLiteLogger:
     def __init__(self):
-        self.db_config = CONFIG['mysql'].copy()
-        self.db_config['database'] = 'weather_mavsdk_logger'
+        self.db_path = DB_PATH
         self.table_name = 'weather_logs'
         self.fields = [
             "timestamp", "latitude", "longitude", "altitude_from_sealevel", "relative_altitude",
@@ -103,19 +95,19 @@ class WeatherMySQLLogger:
 
     def _setup(self):
         try:
-            self.conn = mysql.connector.connect(**self.db_config)
+            self.conn = sqlite3.connect(self.db_path)
             self.cursor = self.conn.cursor()
-            columns = ', '.join([f"`{f}` TEXT" for f in self.fields])
-            self.cursor.execute(f"""
-                CREATE TABLE IF NOT EXISTS `{self.table_name}` (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
+            columns = ', '.join([f'"{f}" TEXT' for f in self.fields])
+            self.cursor.execute(f'''
+                CREATE TABLE IF NOT EXISTS "{self.table_name}" (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
                     {columns}
                 )
-            """)
+            ''')
             self.conn.commit()
-            logging.info(f"Table {self.table_name} created or exists")
+            logging.info(f"Table {self.table_name} created or exists (SQLite)")
         except Exception as e:
-            logging.error(f"MySQL setup failed: {e}")
+            logging.error(f"SQLite setup failed: {e}")
             self.conn = None
             self.cursor = None
             raise
@@ -125,14 +117,14 @@ class WeatherMySQLLogger:
             return
         try:
             values = [str(row.get(field, '')) for field in self.fields]
-            placeholders = ', '.join(['%s'] * len(self.fields))
-            columns = ', '.join([f"`{f}`" for f in self.fields])
+            placeholders = ', '.join(['?'] * len(self.fields))
+            columns = ', '.join([f'"{f}"' for f in self.fields])
             sql = f"INSERT INTO {self.table_name} ({columns}) VALUES ({placeholders})"
             self.cursor.execute(sql, values)
             self.conn.commit()
-            logging.info("Data logged to weather_logs")
+            logging.info("Data logged to weather_logs (SQLite)")
         except Exception as e:
-            logging.error(f"MySQL insert failed: {e}")
+            logging.error(f"SQLite insert failed: {e}")
 
     def close(self):
         try:
@@ -140,7 +132,7 @@ class WeatherMySQLLogger:
                 self.cursor.close()
             if self.conn:
                 self.conn.close()
-            logging.info("WeatherMySQLLogger connection closed")
+            logging.info("WeatherSQLiteLogger connection closed")
         except:
             pass
 
@@ -187,11 +179,6 @@ class TCPServer:
             self.accept_thread = Thread(target=self._accept_clients, daemon=True)
             self.accept_thread.start()
             logging.info(f"TCP Server started on port {self.port}")
-            # Update config with new port
-            CONFIG['tcp_port'] = self.port
-            with open(CONFIG_FILE, 'w') as f:
-                json.dump(CONFIG, f, indent=2)
-            logging.info(f"Updated config.json with TCP port {self.port}")
         except Exception as e:
             logging.error(f"Error starting TCP server: {e}")
             raise
@@ -307,57 +294,6 @@ class CSVLogger:
         except Exception as e:
             logging.error(f"Error flushing CSV data: {e}")
 
-class MySQLLogger:
-    def __init__(self, db_config: Dict[str, Any], table_name: str, fields: list):
-        self.db_config = db_config
-        self.table_name = table_name
-        self.fields = fields
-        self.conn = None
-        self.cursor = None
-        self.connected = False
-        self._connect_and_setup()
-
-    def _connect_and_setup(self):
-        try:
-            self.conn = mysql.connector.connect(**self.db_config)
-            self.cursor = self.conn.cursor()
-            columns = ', '.join([f'`{field}` TEXT' for field in self.fields])
-            create_table_sql = f"""
-                CREATE TABLE IF NOT EXISTS `{self.table_name}` (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    {columns}
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-            """
-            self.cursor.execute(create_table_sql)
-            self.conn.commit()
-            self.connected = True
-            logging.info(f"Table {self.table_name} created or exists")
-        except Error as e:
-            logging.error(f"MySQL connection/setup error: {e}")
-            self.connected = False
-            raise
-
-    def log(self, row: Dict[str, Any]):
-        if not self.connected:
-            return
-        try:
-            placeholders = ', '.join(['%s'] * len(self.fields))
-            columns = ', '.join([f'`{field}`' for field in self.fields])
-            values = [str(row.get(field, '')) for field in self.fields]
-            sql = f"INSERT INTO `{self.table_name}` ({columns}) VALUES ({placeholders})"
-            self.cursor.execute(sql, values)
-            self.conn.commit()
-            logging.info(f"Data logged to {self.table_name}")
-        except Error as e:
-            logging.error(f"MySQL insert error: {e}")
-
-    def close(self):
-        if self.cursor:
-            self.cursor.close()
-        if self.conn:
-            self.conn.close()
-        logging.info("MySQLLogger connection closed")
-
 def signal_handler(signum, frame):
     global shutdown_flag
     logging.info("Shutdown signal received...")
@@ -365,13 +301,8 @@ def signal_handler(signum, frame):
 
 def initialize_databases():
     try:
-        weather_sql_logger = WeatherMySQLLogger()
+        weather_sql_logger = WeatherSQLiteLogger()
         weather_sql_logger.close()
-        db_config = CONFIG['mysql'].copy()
-        db_config['database'] = 'weather_mavsdk_logger'
-        table_name = f"flight_{datetime.datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
-        mysql_logger = MySQLLogger(db_config, table_name, CSVLogger.FIXED_FIELDS)
-        mysql_logger.close()
     except Exception as e:
         logging.error(f"Failed to initialize databases: {e}")
         raise
@@ -391,7 +322,6 @@ async def run():
     drone = System()
     tcp_server = None
     logger = None
-    mysql_logger = None
     weather_sql_logger = None
     latest_imu = {}
     latest_attitude = {}
@@ -404,9 +334,6 @@ async def run():
         'system_time': {},
         'wind': {}
     }
-    db_config = CONFIG['mysql'].copy()
-    db_config['database'] = 'weather_mavsdk_logger'
-    table_name = f"flight_{datetime.datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
     try:
         if log_to_tcp:
             logging.info("Initializing TCP server...")
@@ -422,8 +349,6 @@ async def run():
                 )
                 raise
 
-        logging.info("Connecting to drone...")
-        await drone.connect(system_address="udp://:14550")
         logging.info("Waiting for drone to connect...")
         connection_timeout = 30
         start_time = asyncio.get_event_loop().time()
@@ -440,15 +365,14 @@ async def run():
             logger = CSVLogger(CSV_FILE)
             logging.info(f"CSV logger initialized for {CSV_FILE}")
         if log_to_sql:
-            mysql_logger = MySQLLogger(db_config, table_name, CSVLogger.FIXED_FIELDS)
-            weather_sql_logger = WeatherMySQLLogger()
+            weather_sql_logger = WeatherSQLiteLogger()
 
         def log_all(source, data):
             row = {**data, 'source': source}
             if log_to_csv and logger:
                 logger.log(source, data)
-            if log_to_sql and mysql_logger and mysql_logger.connected:
-                mysql_logger.log(row)
+            if log_to_sql and weather_sql_logger:
+                weather_sql_logger.log(row)
 
         async def stream_imu():
             try:
@@ -541,7 +465,7 @@ async def run():
                             }
                             weather_sql_logger.log(minimal_row)
                         except Exception as e:
-                            logging.warning(f"MySQL weather log skipped: {e}")
+                            logging.warning(f"SQLite weather log skipped: {e}")
                     latest_topic_data['position'] = data.copy()
                     await asyncio.sleep(1 / MAVSDK_STREAM_RATE)
             except Exception as e:
@@ -685,8 +609,6 @@ async def run():
         if logger:
             logger.flush()
             logging.info(f"Data saved to {CSV_FILE}")
-        if mysql_logger:
-            mysql_logger.close()
         if weather_sql_logger:
             weather_sql_logger.close()
         if tcp_server:

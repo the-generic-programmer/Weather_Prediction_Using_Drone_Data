@@ -1,9 +1,13 @@
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning)
+
 import requests
 import xarray as xr
 import pandas as pd
 import numpy as np
 import os
 from datetime import datetime, timedelta
+from tqdm import tqdm
 
 def download_gfs_grib(run_time, forecast_hour, save_path):
     """Download GFS GRIB2 file for a given run time and forecast hour."""
@@ -15,12 +19,17 @@ def download_gfs_grib(run_time, forecast_hour, save_path):
     print(f"Downloading {url}")
     r = requests.get(url, stream=True)
     if r.status_code == 200:
-        with open(save_path, 'wb') as f:
+        total = int(r.headers.get('content-length', 0))
+        with open(save_path, 'wb') as f, tqdm(
+            desc=f"Downloading {os.path.basename(save_path)}",
+            total=total, unit='B', unit_scale=True, unit_divisor=1024
+        ) as bar:
             for chunk in r.iter_content(chunk_size=8192):
                 f.write(chunk)
+                bar.update(len(chunk))
         print(f"Saved to {save_path}")
     else:
-        raise Exception(f"Failed to download: {url}")
+        raise Exception(f"Failed to download: {url} (status {r.status_code})")
 
 def extract_wind_from_grib(grib_path, lat, lon, level=850):
     """Extract wind speed and direction from GRIB2 file at given lat/lon and pressure level."""
@@ -38,19 +47,30 @@ def extract_wind_from_grib(grib_path, lat, lon, level=850):
     except Exception as e:
         raise RuntimeError(f"Failed to open GRIB file: {e}")
 
-    if 'u' in ds.variables and 'v' in ds.variables:
-        u = ds['u'].sel(longitude=lon, latitude=lat, method='nearest')
-        v = ds['v'].sel(longitude=lon, latitude=lat, method='nearest')
-        wind_speed = np.sqrt(u**2 + v**2)
-        wind_dir = (np.arctan2(u, v) * 180 / np.pi) % 360
-        df = pd.DataFrame({
-            'wind_speed': wind_speed.values,
-            'wind_direction': wind_dir.values,
-            'pressure_level_hPa': level
-        })
-        return df
-    else:
-        raise ValueError("Wind components 'u' and 'v' not found in dataset.")
+    # Defensive: check for u and v wind components
+    u_var = None
+    v_var = None
+    for cand in ['u', 'u10', 'u_component_of_wind_isobaric']:  # try common names
+        if cand in ds.variables:
+            u_var = cand
+            break
+    for cand in ['v', 'v10', 'v_component_of_wind_isobaric']:
+        if cand in ds.variables:
+            v_var = cand
+            break
+    if not u_var or not v_var:
+        raise ValueError(f"Wind components 'u' and 'v' not found in dataset. Available: {list(ds.variables)}")
+
+    u = ds[u_var].sel(longitude=lon, latitude=lat, method='nearest')
+    v = ds[v_var].sel(longitude=lon, latitude=lat, method='nearest')
+    wind_speed = np.sqrt(u**2 + v**2)
+    wind_dir = (np.arctan2(u, v) * 180 / np.pi) % 360
+    df = pd.DataFrame({
+        'wind_speed': wind_speed.values.flatten(),
+        'wind_direction': wind_dir.values.flatten(),
+        'pressure_level_hPa': level
+    })
+    return df
 
 def fetch_gfs_wind_timeseries(lat, lon, start_time, hours=24, run_hour='00', level=850):
     """Fetch wind timeseries for a location from GFS for a given start time and duration."""
@@ -69,6 +89,8 @@ def fetch_gfs_wind_timeseries(lat, lon, start_time, hours=24, run_hour='00', lev
             print(f"Failed for hour {fh}: {e}")
     if dfs:
         result = pd.concat(dfs, ignore_index=True)
+        # Remove outliers for LSTM training (optional, can be tuned)
+        result = result[(result['wind_speed'] < 100) & (result['wind_direction'] <= 360)]
         csv_path = f"data/gfs_wind_{lat}_{lon}_{start_time.strftime('%Y%m%d')}_level{level}.csv"
         result.to_csv(csv_path, index=False)
         print(f"Saved timeseries to {csv_path}")
