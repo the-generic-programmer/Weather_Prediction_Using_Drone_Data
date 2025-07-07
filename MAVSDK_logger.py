@@ -6,7 +6,6 @@ import csv
 import json
 import socket
 import datetime
-import random
 from pathlib import Path
 from threading import Thread, Lock
 import signal
@@ -41,10 +40,7 @@ TCP_PORT = 9000
 PORT_RANGE = 50  # Try ports 9000–9049
 MAVSDK_STREAM_RATE = 20.0  # Hz
 TCP_STREAM_RATE = 5.0  # Hz
-DRONE_CONNECTION_TIMEOUT = 5.0  # Reduced from 15.0
-DRONE_CONNECTION_RETRIES = 3  # Reduced from 5
 shutdown_flag = False
-USE_SIMULATED_DATA = False
 
 def find_free_port(start_port: int, max_attempts: int = PORT_RANGE) -> Optional[int]:
     """Find an available port with retries."""
@@ -309,84 +305,28 @@ def initialize_databases():
         logging.error(f"Failed to initialize databases: {e}")
         raise
 
-async def connect_drone_with_retries(drone: System, retries: int = DRONE_CONNECTION_RETRIES, timeout: float = DRONE_CONNECTION_TIMEOUT):
-    for attempt in range(1, retries + 1):
-        try:
-            logging.debug(f"Drone connection attempt {attempt}/{retries}")
-            await asyncio.wait_for(drone.connect(system_address="udp://:14540"), timeout=timeout)
-            logging.info("Drone connected successfully")
-            
-            # Wait for core to be ready
-            async for state in drone.core.connection_state():
-                if state.is_connected:
-                    logging.info("Drone core is ready")
-                    return True
-                break
-            
-        except asyncio.TimeoutError:
-            logging.warning(f"Drone connection attempt {attempt}/{retries} timed out after {timeout} seconds")
-        except Exception as e:
-            logging.error(f"Drone connection attempt {attempt}/{retries} failed: {e}")
+async def connect_drone(drone: System):
+    """Wait indefinitely for drone connection."""
+    try:
+        logging.info("Attempting to connect to drone...")
+        # FIXED: Changed from port 14540 to 14550 to match SITL output
+        await drone.connect(system_address="udp://:14550")
+        logging.info("Drone connected successfully")
         
-        if attempt < retries:
-            logging.info(f"Retrying in 1 second...")  # Reduced from 5 seconds
-            await asyncio.sleep(1)
-    
-    logging.error("Failed to connect to drone after all retries")
+        # Wait for core to be ready
+        async for state in drone.core.connection_state():
+            if state.is_connected:
+                logging.info("Drone core is ready")
+                return True
+            if shutdown_flag:
+                break
+    except Exception as e:
+        logging.error(f"Error connecting to drone: {e}")
     return False
 
-class SimulatedDataGenerator:
-    def __init__(self):
-        self.base_lat = 13.0
-        self.base_lon = 77.625
-        self.base_alt = 300.0
-        self.time_offset = 0
-        
-    async def generate_data(self):
-        """Generate more realistic simulated data"""
-        while not shutdown_flag:
-            self.time_offset += 1/MAVSDK_STREAM_RATE
-            
-            # Add some realistic variations
-            lat_variation = 0.001 * random.uniform(-1, 1)
-            lon_variation = 0.001 * random.uniform(-1, 1)
-            alt_variation = 10 * random.uniform(-1, 1)
-            
-            data = {
-                "timestamp": datetime.datetime.utcnow().isoformat(timespec='milliseconds') + 'Z',
-                "latitude": self.base_lat + lat_variation,
-                "longitude": self.base_lon + lon_variation,
-                "altitude_from_sealevel": self.base_alt + alt_variation,
-                "relative_altitude": 50 + alt_variation,
-                "north_m_s": 2 * random.uniform(-1, 1),
-                "east_m_s": 2 * random.uniform(-1, 1),
-                "down_m_s": 0.5 * random.uniform(-1, 1),
-                "temperature_degc": 25 + 5 * random.uniform(-1, 1),
-                "roll_deg": 5 * random.uniform(-1, 1),
-                "pitch_deg": 5 * random.uniform(-1, 1),
-                "yaw_deg": (self.time_offset * 10) % 360,  # Slow rotation
-                "voltage": 11.5 + 0.5 * random.uniform(-1, 1),
-                "remaining_percent": max(0, 100 - self.time_offset * 0.1),
-                "angular_velocity_forward_rad_s": 0.1 * random.uniform(-1, 1),
-                "angular_velocity_right_rad_s": 0.1 * random.uniform(-1, 1),
-                "angular_velocity_down_rad_s": 0.1 * random.uniform(-1, 1),
-                "linear_acceleration_forward_m_s2": 0.5 * random.uniform(-1, 1),
-                "linear_acceleration_right_m_s2": 0.5 * random.uniform(-1, 1),
-                "linear_acceleration_down_m_s2": 9.8 + 0.5 * random.uniform(-1, 1),
-                "magnetic_field_forward_gauss": 0.05 * random.uniform(-1, 1),
-                "magnetic_field_right_gauss": 0.05 * random.uniform(-1, 1),
-                "magnetic_field_down_gauss": 0.05 * random.uniform(-1, 1),
-                "speed_m_s": 3 + 2 * random.uniform(-1, 1),
-                "direction_deg": (self.time_offset * 5) % 360,
-                "system_time": datetime.datetime.utcnow().isoformat(timespec='milliseconds') + 'Z',
-                "unix_time": datetime.datetime.utcnow().timestamp()
-            }
-            yield data
-            await asyncio.sleep(1 / MAVSDK_STREAM_RATE)
-
 async def run():
-    global shutdown_flag, USE_SIMULATED_DATA
-    
+    global shutdown_flag
+
     print("Select logging options (comma separated, e.g. sql,csv,tcp):")
     print("Options: sql, csv, tcp")
     user_input = input("Log to (default: csv,tcp): ").strip().lower()
@@ -416,14 +356,19 @@ async def run():
     if log_to_sql:
         weather_sql_logger = WeatherSQLiteLogger()
 
-    # Attempt drone connection
+    # Wait for drone connection
     drone = System()
-    if await connect_drone_with_retries(drone):
-        USE_SIMULATED_DATA = False
-        logging.info("Using real drone data")
-    else:
-        USE_SIMULATED_DATA = True
-        logging.info("Using simulated data due to drone connection failure")
+    if not await connect_drone(drone):
+        logging.error("Failed to connect to drone. Script will wait until connection is established.")
+        while not shutdown_flag:
+            if await connect_drone(drone):
+                break
+            await asyncio.sleep(5)  # Check every 5 seconds
+        if shutdown_flag:
+            logging.info("Shutdown signal received while waiting for drone connection.")
+            return
+
+    logging.info("Using real drone data")
 
     # Shared data storage
     shared_data = {
@@ -457,132 +402,93 @@ async def run():
         except Exception as e:
             logging.error(f"Error in log_all: {e}")
 
-    # Initialize simulated data generator
-    sim_gen = SimulatedDataGenerator()
-
     async def stream_telemetry():
         """Combined telemetry streaming function"""
         try:
-            if USE_SIMULATED_DATA:
-                async for data in sim_gen.generate_data():
+            # Real drone data streaming
+            tasks = []
+            
+            async def stream_position():
+                async for pos in drone.telemetry.position():
                     if shutdown_flag:
                         break
-                    
-                    # Update shared data
+                    data = {
+                        "latitude": getattr(pos, 'latitude_deg', None),
+                        "longitude": getattr(pos, 'longitude_deg', None),
+                        "altitude_from_sealevel": getattr(pos, 'absolute_altitude_m', None),
+                        "relative_altitude": getattr(pos, 'relative_altitude_m', None),
+                    }
                     with data_lock:
-                        shared_data['latest_imu'] = {
-                            k: v for k, v in data.items() 
-                            if k.startswith(('angular_velocity', 'linear_acceleration', 'magnetic_field', 'temperature'))
-                        }
-                        shared_data['latest_attitude'] = {
-                            k: v for k, v in data.items() 
-                            if k.endswith('_deg') and k.startswith(('roll', 'pitch', 'yaw'))
-                        }
-                        shared_data['latest_position'] = {
-                            k: v for k, v in data.items() 
-                            if k in ['latitude', 'longitude', 'altitude_from_sealevel', 'relative_altitude']
-                        }
-                        shared_data['latest_velocity'] = {
-                            k: v for k, v in data.items() 
-                            if k.endswith('_m_s')
-                        }
-                        shared_data['latest_battery'] = {
-                            k: v for k, v in data.items() 
-                            if k in ['voltage', 'remaining_percent']
-                        }
-                        shared_data['latest_wind'] = {
-                            k: v for k, v in data.items() 
-                            if k in ['speed_m_s', 'direction_deg']
-                        }
-                    
-                    # Log complete data
-                    log_all("simulated_telemetry", data)
-                    
-            else:
-                # Real drone data streaming
-                tasks = []
-                
-                async def stream_position():
-                    async for pos in drone.telemetry.position():
-                        if shutdown_flag:
-                            break
-                        data = {
-                            "latitude": getattr(pos, 'latitude_deg', None),
-                            "longitude": getattr(pos, 'longitude_deg', None),
-                            "altitude_from_sealevel": getattr(pos, 'absolute_altitude_m', None),
-                            "relative_altitude": getattr(pos, 'relative_altitude_m', None),
-                        }
-                        with data_lock:
-                            shared_data['latest_position'] = data
-                            combined_data = {}
-                            for category in shared_data.values():
-                                combined_data.update(category)
-                        log_all("position", combined_data)
-                
-                async def stream_attitude():
-                    async for att in drone.telemetry.attitude_euler():
-                        if shutdown_flag:
-                            break
-                        data = {
-                            "roll_deg": getattr(att, 'roll_deg', None),
-                            "pitch_deg": getattr(att, 'pitch_deg', None),
-                            "yaw_deg": getattr(att, 'yaw_deg', None),
-                        }
-                        with data_lock:
-                            shared_data['latest_attitude'] = data
-                
-                async def stream_velocity():
-                    async for vel in drone.telemetry.velocity_ned():
-                        if shutdown_flag:
-                            break
-                        data = {
-                            "north_m_s": getattr(vel, 'north_m_s', None),
-                            "east_m_s": getattr(vel, 'east_m_s', None),
-                            "down_m_s": getattr(vel, 'down_m_s', None),
-                        }
-                        with data_lock:
-                            shared_data['latest_velocity'] = data
-                
-                async def stream_battery():
-                    async for bat in drone.telemetry.battery():
-                        if shutdown_flag:
-                            break
-                        data = {
-                            "voltage": getattr(bat, 'voltage_v', None),
-                            "remaining_percent": getattr(bat, 'remaining_percent', None),
-                        }
-                        with data_lock:
-                            shared_data['latest_battery'] = data
-                
-                async def stream_imu():
-                    async for imu in drone.telemetry.raw_imu():
-                        if shutdown_flag:
-                            break
-                        data = {
-                            "angular_velocity_forward_rad_s": getattr(imu.angular_velocity_frd, 'forward_rad_s', None),
-                            "angular_velocity_right_rad_s": getattr(imu.angular_velocity_frd, 'right_rad_s', None),
-                            "angular_velocity_down_rad_s": getattr(imu.angular_velocity_frd, 'down_rad_s', None),
-                            "linear_acceleration_forward_m_s2": getattr(imu.linear_acceleration_frd, 'forward_m_s2', None),
-                            "linear_acceleration_right_m_s2": getattr(imu.linear_acceleration_frd, 'right_m_s2', None),
-                            "linear_acceleration_down_m_s2": getattr(imu.linear_acceleration_frd, 'down_m_s2', None),
-                            "magnetic_field_forward_gauss": getattr(imu.magnetic_field_frd, 'forward_gauss', None),
-                            "magnetic_field_right_gauss": getattr(imu.magnetic_field_frd, 'right_gauss', None),
-                            "magnetic_field_down_gauss": getattr(imu.magnetic_field_frd, 'down_gauss', None),
-                            "temperature_degc": getattr(imu, 'temperature_degc', None),
-                        }
-                        with data_lock:
-                            shared_data['latest_imu'] = data
-                
-                tasks = [
-                    asyncio.create_task(stream_position()),
-                    asyncio.create_task(stream_attitude()),
-                    asyncio.create_task(stream_velocity()),
-                    asyncio.create_task(stream_battery()),
-                    asyncio.create_task(stream_imu()),
-                ]
-                
-                await asyncio.gather(*tasks, return_exceptions=True)
-                
+                        shared_data['latest_position'] = data
+                        combined_data = {}
+                        for category in shared_data.values():
+                            combined_data.update(category)
+                    log_all("position", combined_data)
+            
+            async def stream_attitude():
+                async for att in drone.telemetry.attitude_euler():
+                    if shutdown_flag:
+                        break
+                    data = {
+                        "roll_deg": getattr(att, 'roll_deg', None),
+                        "pitch_deg": getattr(att, 'pitch_deg', None),
+                        "yaw_deg": getattr(att, 'yaw_deg', None),
+                    }
+                    with data_lock:
+                        shared_data['latest_attitude'] = data
+            
+            async def stream_velocity():
+                async for vel in drone.telemetry.velocity_ned():
+                    if shutdown_flag:
+                        break
+                    data = {
+                        "north_m_s": getattr(vel, 'north_m_s', None),
+                        "east_m_s": getattr(vel, 'east_m_s', None),
+                        "down_m_s": getattr(vel, 'down_m_s', None),
+                    }
+                    with data_lock:
+                        shared_data['latest_velocity'] = data
+            
+            async def stream_battery():
+                async for bat in drone.telemetry.battery():
+                    if shutdown_flag:
+                        break
+                    data = {
+                        "voltage": getattr(bat, 'voltage_v', None),
+                        "remaining_percent": getattr(bat, 'remaining_percent', None),
+                    }
+                    with data_lock:
+                        shared_data['latest_battery'] = data
+            
+            async def stream_imu():
+                async for imu in drone.telemetry.raw_imu():
+                    if shutdown_flag:
+                        break
+                    data = {
+                        "angular_velocity_forward_rad_s": getattr(imu.angular_velocity_frd, 'forward_rad_s', None),
+                        "angular_velocity_right_rad_s": getattr(imu.angular_velocity_frd, 'right_rad_s', None),
+                        "angular_velocity_down_rad_s": getattr(imu.angular_velocity_frd, 'down_rad_s', None),
+                        "linear_acceleration_forward_m_s2": getattr(imu.linear_acceleration_frd, 'forward_m_s2', None),
+                        "linear_acceleration_right_m_s2": getattr(imu.linear_acceleration_frd, 'right_m_s2', None),
+                        "linear_acceleration_down_m_s2": getattr(imu.linear_acceleration_frd, 'down_m_s2', None),
+                        "magnetic_field_forward_gauss": getattr(imu.magnetic_field_frd, 'forward_gauss', None),
+                        "magnetic_field_right_gauss": getattr(imu.magnetic_field_frd, 'right_gauss', None),
+                        "magnetic_field_down_gauss": getattr(imu.magnetic_field_frd, 'down_gauss', None),
+                        "temperature_degc": getattr(imu, 'temperature_degc', None),
+                    }
+                    with data_lock:
+                        shared_data['latest_imu'] = data
+            
+            tasks = [
+                asyncio.create_task(stream_position()),
+                asyncio.create_task(stream_attitude()),
+                asyncio.create_task(stream_velocity()),
+                asyncio.create_task(stream_battery()),
+                asyncio.create_task(stream_imu()),
+            ]
+            
+            await asyncio.gather(*tasks, return_exceptions=True)
+            
         except Exception as e:
             logging.error(f"Error in stream_telemetry: {e}")
 
@@ -599,8 +505,6 @@ async def run():
 
     async def monitor_connection():
         """Monitor drone connection"""
-        if USE_SIMULATED_DATA:
-            return
         try:
             async for state in drone.core.connection_state():
                 if not state.is_connected:
@@ -611,7 +515,7 @@ async def run():
         except Exception as e:
             logging.error(f"Error monitoring connection: {e}")
 
-    logging.info("Logging started. Ready to run predict.py. Press Ctrl+C to stop.")
+    logging.info("Logging started. Waiting for drone connection. Press Ctrl+C to stop.")
     
     # Create and run tasks
     tasks = [
