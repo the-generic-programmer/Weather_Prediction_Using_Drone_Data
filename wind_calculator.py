@@ -699,7 +699,7 @@ class CSVWindMonitor:
         print(f"💨 Speed      : {wind.speed_knots:.2f} knots ({wind.speed_knots * 1.852:.1f} km/h)")
         print(f"🧭 Direction  : {wind.direction_degrees:.1f}° ({compass})")
         print(f"🏔️ Altitude   : {wind.altitude:.1f} m")
-        print(f"🎯 Confidence : {wind.confidence:.3f} | Samples: {wind.sample_count}")
+#        print(f"🎯 Confidence : {wind.confidence:.3f} | Samples: {wind.sample_count}")
         print(f"📊 Components : E={wind.u_component:.2f} m/s, N={wind.v_component:.2f} m/s")
         print(f"🌪️ Category   : {beaufort}")
         print(f"⚙️ Method     : {wind.method}")
