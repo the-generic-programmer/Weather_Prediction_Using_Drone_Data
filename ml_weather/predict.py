@@ -18,6 +18,7 @@ from geopy.geocoders import Nominatim
 import pytz
 import mysql.connector
 from mysql.connector import Error
+from wind_calculator import PrecisionWindCalculator
 
 # Configure logging
 logging.basicConfig(
@@ -330,39 +331,41 @@ class WeatherPredictor:
                 
             self.model = joblib.load(model_path)
             self.scaler = joblib.load(scaler_path)
-            logging.info("Weather model and scaler loaded successfully")
+            self.wind_calculator = PrecisionWindCalculator()
+            logging.info("Weather model, scaler, and wind calculator loaded successfully")
         except Exception as e:
-            logging.error(f"Failed to load model or scaler: {e}")
+            logging.error(f"Failed to load model, scaler, or wind calculator: {e}")
             raise
 
     def prepare_drone_data(self, drone_data: dict) -> pd.DataFrame:
-        """Prepare drone data for prediction."""
+        """Prepare drone data for rain prediction (with wind and altitude)"""
         current_time = datetime.now(timezone.utc)
-        
-        # Calculate wind metrics
-        north_wind = safe_float(drone_data.get('north_m_s', 0))
-        east_wind = safe_float(drone_data.get('east_m_s', 0))
-        
-        wind_speed = np.sqrt(north_wind**2 + east_wind**2)
-        wind_direction = (np.degrees(np.arctan2(east_wind, north_wind)) % 360) if (north_wind != 0 or east_wind != 0) else 0
-
-        temperature = safe(drone_data.get('temperature_degc'))
-        if temperature is None:
-            logging.info("temperature_degc missing, model will predict temperature")
-
+        # Calculate wind metrics from drone or use wind_calculator if available
+        wind_speed = safe_float(drone_data.get('wind_speed_10m', 0))
+        wind_direction = safe_float(drone_data.get('wind_direction_10m', 0))
+        wind_gusts = safe_float(drone_data.get('wind_gusts_10m', wind_speed))
+        altitude = safe_float(drone_data.get('altitude', 0))
+        # If wind estimate from wind_calculator is available, use it
+        wind_est = self.wind_calculator.calculate_wind_multi_method()
+        if wind_est:
+            wind_speed = wind_est.speed_knots * 0.514444  # knots to m/s
+            wind_direction = wind_est.direction_degrees
+            altitude = wind_est.altitude
         features = {
             'hour': current_time.hour,
             'month': current_time.month,
             'relative_humidity_2m': safe_float(drone_data.get('relative_humidity_2m', 50)),
             'pressure_msl': safe_float(drone_data.get('pressure_msl', 1013)),
             'wind_speed_10m': wind_speed,
+            'wind_gusts_10m': wind_gusts,
             'wind_direction_10m': wind_direction,
-            'cloudcover': safe_float(drone_data.get('cloud_cover', 0))
+            'cloudcover': safe_float(drone_data.get('cloud_cover', 0)),
+            'altitude': altitude
         }
         return pd.DataFrame([features])
 
     def predict(self, features: pd.DataFrame) -> float:
-        """Make temperature prediction."""
+        """Make rain prediction (precipitation in mm)"""
         try:
             X_scaled = self.scaler.transform(features)
             prediction = self.model.predict(X_scaled)[0]
@@ -396,15 +399,7 @@ def process_live_prediction(data: dict):
         
         # Prepare features and make prediction
         features = predictor.prepare_drone_data(data)
-        
-        # Use existing temperature if available, otherwise predict
-        existing_temp = safe(data.get('temperature_degc'))
-        if existing_temp is not None:
-            pred = float(existing_temp)
-            logging.info(f"Using existing temperature: {pred}°C")
-        else:
-            pred = predictor.predict(features)
-            logging.info(f"Predicted temperature: {pred}°C")
+        rain_prediction = predictor.predict(features)
         
         # Get additional weather data
         rh, cloud_cover_percent, rh_time, rh_url = get_live_humidity(lat, lon)
@@ -420,47 +415,40 @@ def process_live_prediction(data: dict):
         drone_sun = get_sunrise_sunset(lat, lon, drone_tz)
         user_sun = get_sunrise_sunset(*EXPECTED_COORDS, user_tz)
         
-        # Calculate confidence interval
-        ci = 0.1  # Default confidence interval
-        if existing_temp is None:
-            try:
-                # Generate multiple predictions for confidence interval
-                preds = [predictor.predict(features) for _ in range(10)]  # Reduced from 50 for performance
-                std_dev = np.std(preds)
-                ci = max(round(1.96 * std_dev, 2), 0.1)
-            except Exception as e:
-                logging.warning(f"Failed to calculate confidence interval: {e}")
-                ci = 0.1
-        
+        # Calculate confidence interval for rain prediction
+        try:
+            preds = [predictor.predict(features) for _ in range(10)]
+            std_dev = np.std(preds)
+            ci = max(round(1.96 * std_dev, 2), 0.1)
+        except Exception as e:
+            logging.warning(f"Failed to calculate confidence interval: {e}")
+            ci = 0.1
         # Get timestamp
         now = datetime.now(timezone.utc)
         timestamp = safe(data.get("timestamp"))
         if timestamp is None:
             timestamp = now.strftime("%Y-%m-%dT%H:%M:%S")
-        
         # Build output
         output = {
             "timestamp": timestamp,
             "rain_chance_2h (%)": float(rain_chance_2h),
             "cloud_cover (%)": float(cloud_cover_percent),
-            "predicted_temperature": round(pred, 2),
-            "confidence_range (±°C)": ci,
+            "predicted_precipitation": round(rain_prediction, 2),
+            "confidence_range (±mm)": ci,
             "humidity (% RH)": round(rh, 1),
             "humidity_timestamp": humidity_time_fmt,
             "sunrise_at_drone_location": drone_sun['sunrise_readable'],
             "sunset_at_drone_location": drone_sun['sunset_readable'],
             "sunrise_at_user_location": user_sun['sunrise_readable'],
             "sunset_at_user_location": user_sun['sunset_readable'],
-            "info": f"95% chance the actual temperature lies between {round(pred - ci, 2)}°C and {round(pred + ci, 2)}°C",
+            "info": f"95% chance the actual precipitation lies between {round(rain_prediction - ci, 2)} mm and {round(rain_prediction + ci, 2)} mm",
             "humidity_source": rh_url,
             "location": drone_loc,
             "input": data
         }
-        
         # Add warning if location is far from expected
         if abs(lat - EXPECTED_COORDS[0]) > 2 or abs(lon - EXPECTED_COORDS[1]) > 2:
             output["warning"] = f"Warning: Drone location is far from expected coordinates ({EXPECTED_COORDS})"
-        
         return output
 
     except Exception as e:

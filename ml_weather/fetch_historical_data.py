@@ -62,9 +62,11 @@ def fetch_historical_weather(latitude: float, longitude: float,
             "pressure_msl",
             "wind_speed_10m",
             "wind_direction_10m",
+            "wind_gusts_10m",
             "precipitation",
             "cloudcover"
         ]
+        # Wind features (wind_speed_10m, wind_direction_10m, wind_gusts_10m) are always included for wind prediction tasks
     # Validate variables
     valid_vars = [v for v in variables if v in SUPPORTED_VARIABLES]
     invalid_vars = [v for v in variables if v not in SUPPORTED_VARIABLES]

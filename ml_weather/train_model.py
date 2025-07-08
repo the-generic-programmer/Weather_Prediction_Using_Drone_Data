@@ -22,27 +22,26 @@ class WeatherPredictor:
         
     def prepare_features(self, df: pd.DataFrame) -> tuple:
         """
-        Prepare features for the model
+        Prepare features for the model (wind and other factors for rain prediction)
         """
-        # Extract hour from timestamp
         df['hour'] = pd.to_datetime(df['time']).dt.hour
         df['month'] = pd.to_datetime(df['time']).dt.month
-
-        # Features to use
+        # Features: wind, humidity, pressure, cloud, hour, month, altitude (if available)
         feature_columns = [
             'hour', 'month',
             'relative_humidity_2m',
             'pressure_msl',
             'wind_speed_10m',
+            'wind_gusts_10m',
             'wind_direction_10m',
-            'cloud_cover'
+            'cloudcover'
         ]
-        # Defensive: check for missing columns
-        for col in feature_columns + ['temperature_2m']:
+        if 'altitude' in df.columns:
+            feature_columns.append('altitude')
+        for col in feature_columns + ['precipitation']:
             if col not in df.columns:
                 raise ValueError(f"Missing required column: {col}")
-        # Target variable (temperature)
-        target = df['temperature_2m']
+        target = df['precipitation']
         return df[feature_columns], target
 
     def train(self, X: pd.DataFrame, y: pd.Series):
@@ -91,7 +90,7 @@ def main():
     print("Loading historical weather data...")
     df = pd.read_csv(data_file)
     # Drop rows where target or features are NaN
-    df = df.dropna(subset=['temperature_2m', 'relative_humidity_2m', 'pressure_msl', 'wind_speed_10m', 'wind_direction_10m', 'cloud_cover'])
+    df = df.dropna(subset=['precipitation', 'relative_humidity_2m', 'pressure_msl', 'wind_speed_10m', 'wind_gusts_10m', 'wind_direction_10m', 'cloudcover'])
     # Initialize predictor
     predictor = WeatherPredictor()
     # Prepare features
@@ -121,10 +120,10 @@ def main():
         print(f"Evaluation error: {e}")
         return
     print("\nTraining Set Metrics:")
-    print(f"RMSE: {train_metrics['RMSE']:.2f}C")
+    print(f"RMSE: {train_metrics['RMSE']:.2f} mm")
     print(f"R2 Score: {train_metrics['R2']:.3f}")
     print("\nTest Set Metrics:")
-    print(f"RMSE: {test_metrics['RMSE']:.2f}C")
+    print(f"RMSE: {test_metrics['RMSE']:.2f} mm")
     print(f"R2 Score: {test_metrics['R2']:.3f}")
     # Save model
     print("\nSaving model...")
