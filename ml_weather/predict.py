@@ -10,14 +10,13 @@ import requests
 import sys
 import time
 import logging
+import sqlite3
 from datetime import datetime, timezone
 from astral import LocationInfo
 from astral.sun import sun
 from timezonefinder import TimezoneFinder
 from geopy.geocoders import Nominatim
 import pytz
-import mysql.connector
-from mysql.connector import Error
 from wind_calculator import PrecisionWindCalculator
 
 # Configure logging
@@ -28,38 +27,21 @@ logging.basicConfig(
 )
 
 def initialize_database():
-    """Initialize the weather_predict database at script start."""
+    """Initialize the weather_predict SQLite database at script start."""
     try:
-        temp_config = {
-            'host': 'localhost',
-            'user': 'root',
-            'password': 'Root@123'
-        }
-        conn = mysql.connector.connect(**temp_config)
+        conn = sqlite3.connect('weather_predict.db')
         cursor = conn.cursor()
-        cursor.execute("CREATE DATABASE IF NOT EXISTS weather_predict")
-        conn.commit()
-        cursor.close()
-        conn.close()
-        logging.info("Database weather_predict created or exists")
-
+        
         # Create predictions table
-        conn = mysql.connector.connect(
-            host='localhost',
-            user='root',
-            password='Root@123',
-            database='weather_predict'
-        )
-        cursor = conn.cursor()
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS predictions (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                timestamp DATETIME,
-                predicted_temperature FLOAT,
-                humidity FLOAT,
-                wind_speed FLOAT,
-                wind_direction FLOAT,
-                confidence_range FLOAT,
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT,
+                predicted_temperature REAL,
+                humidity REAL,
+                wind_speed REAL,
+                wind_direction REAL,
+                confidence_range REAL,
                 humidity_timestamp TEXT,
                 sunrise_drone TEXT,
                 sunset_drone TEXT,
@@ -69,17 +51,19 @@ def initialize_database():
                 humidity_source TEXT,
                 location TEXT,
                 warning TEXT,
-                rain_chance_2h FLOAT,
-                cloud_cover FLOAT
+                rain_chance_2h REAL,
+                cloud_cover REAL
             )
         ''')
         conn.commit()
-        cursor.close()
-        conn.close()
-        logging.info("Table predictions created or exists")
-    except Error as e:
-        logging.error(f"Failed to initialize database weather_predict: {e}")
+        logging.info("SQLite database weather_predict and table predictions created or exists")
+    except sqlite3.Error as e:
+        logging.error(f"Failed to initialize SQLite database: {e}")
         raise
+    finally:
+        if conn:
+            cursor.close()
+            conn.close()
 
 def safe(val):
     """Safely convert value to appropriate type, handling None, NaN, and empty strings."""
@@ -93,7 +77,6 @@ def safe(val):
         if val.lower() in ("nan", "none", "", "null"):
             return None
         try:
-            # Try to convert to float if it's a numeric string
             return float(val)
         except (ValueError, TypeError):
             return val
@@ -109,23 +92,16 @@ def safe_float(val, default=0.0):
     except (ValueError, TypeError):
         return default
 
-# Define database logging function
 def log_prediction_to_db(result):
-    """Log prediction result to database with proper error handling."""
+    """Log prediction result to SQLite database with proper error handling."""
     try:
-        conn = mysql.connector.connect(
-            host='localhost',
-            user='root',
-            password='Root@123',
-            database='weather_predict'
-        )
+        conn = sqlite3.connect('weather_predict.db')
         cursor = conn.cursor()
 
         # Parse timestamp
         ts = result.get("timestamp")
         if ts:
             try:
-                # Handle different timestamp formats
                 if isinstance(ts, str):
                     if 'T' in ts:
                         ts = datetime.fromisoformat(ts.replace('Z', '+00:00'))
@@ -138,17 +114,14 @@ def log_prediction_to_db(result):
                 ts = datetime.now(timezone.utc)
         else:
             ts = datetime.now(timezone.utc)
+        ts_str = ts.isoformat()
 
-        # Calculate wind metrics safely
-        input_data = result.get('input', {})
-        north_wind = safe_float(input_data.get('north_m_s', 0))
-        east_wind = safe_float(input_data.get('east_m_s', 0))
-        
-        wind_speed = np.sqrt(north_wind**2 + east_wind**2)
-        wind_direction = (np.degrees(np.arctan2(east_wind, north_wind)) % 360) if (north_wind != 0 or east_wind != 0) else 0
+        # Use wind speed and direction from result
+        wind_speed = safe_float(result.get('wind_speed_knots'))
+        wind_direction = safe_float(result.get('wind_direction_degrees'))
 
         values = (
-            ts,
+            ts_str,
             safe_float(result.get('predicted_temperature')),
             safe_float(result.get('humidity (% RH)')),
             wind_speed,
@@ -175,22 +148,23 @@ def log_prediction_to_db(result):
                 sunrise_user, sunset_user, info,
                 humidity_source, location, warning,
                 rain_chance_2h, cloud_cover
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', values)
 
         conn.commit()
-        cursor.close()
-        conn.close()
-        logging.info("Prediction logged to database")
-    except Error as e:
-        logging.error(f"Database Error: {e}")
+        logging.info("Prediction logged to SQLite database")
+    except sqlite3.Error as e:
+        logging.error(f"SQLite Database Error: {e}")
     except Exception as e:
         logging.error(f"Unexpected error logging to database: {e}")
+    finally:
+        if conn:
+            cursor.close()
+            conn.close()
 
 MODEL_DIR = "models"
 EXPECTED_COORDS = (13.0, 77.625)
 
-# Initialize global objects with error handling
 try:
     tf = TimezoneFinder()
     geolocator = Nominatim(user_agent="weather_predictor")
@@ -290,7 +264,6 @@ def format_humidity_time(iso):
     """Format ISO timestamp to readable format."""
     try:
         if isinstance(iso, str):
-            # Handle different ISO formats
             iso = iso.replace('Z', '+00:00')
             dt = datetime.fromisoformat(iso)
         elif isinstance(iso, datetime):
@@ -331,27 +304,62 @@ class WeatherPredictor:
                 
             self.model = joblib.load(model_path)
             self.scaler = joblib.load(scaler_path)
-            self.wind_calculator = PrecisionWindCalculator()
-            logging.info("Weather model, scaler, and wind calculator loaded successfully")
+            
+            if hasattr(self.scaler, 'feature_names_in_'):
+                self.feature_names = list(self.scaler.feature_names_in_)
+                logging.info(f"Expected features: {self.feature_names}")
+            else:
+                self.feature_names = [
+                    'hour', 'month', 'relative_humidity_2m', 'pressure_msl',
+                    'wind_speed_10m', 'wind_gusts_10m', 'wind_direction_10m', 'cloudcover'
+                ]
+                logging.warning(f"Feature names not found in scaler, using default: {self.feature_names}")
+            
+            try:
+                self.wind_calculator = PrecisionWindCalculator()
+                logging.info("Wind calculator loaded successfully")
+            except Exception as wind_err:
+                logging.warning(f"Wind calculator failed to load: {wind_err}")
+                self.wind_calculator = None
+                
+            logging.info("Weather model and scaler loaded successfully")
+            
         except Exception as e:
-            logging.error(f"Failed to load model, scaler, or wind calculator: {e}")
+            logging.error(f"Failed to load model or scaler: {e}")
             raise
 
     def prepare_drone_data(self, drone_data: dict) -> pd.DataFrame:
-        """Prepare drone data for rain prediction (with wind and altitude)"""
+        """Prepare drone data for prediction using only the features the model expects"""
         current_time = datetime.now(timezone.utc)
-        # Calculate wind metrics from drone or use wind_calculator if available
+        
         wind_speed = safe_float(drone_data.get('wind_speed_10m', 0))
         wind_direction = safe_float(drone_data.get('wind_direction_10m', 0))
         wind_gusts = safe_float(drone_data.get('wind_gusts_10m', wind_speed))
-        altitude = safe_float(drone_data.get('altitude', 0))
-        # If wind estimate from wind_calculator is available, use it
-        wind_est = self.wind_calculator.calculate_wind_multi_method()
-        if wind_est:
-            wind_speed = wind_est.speed_knots * 0.514444  # knots to m/s
-            wind_direction = wind_est.direction_degrees
-            altitude = wind_est.altitude
-        features = {
+        
+        if self.wind_calculator:
+            try:
+                wind_est = self.wind_calculator.calculate_wind_multi_method()
+                if wind_est:
+                    wind_speed = wind_est.speed_knots * 0.514444  # knots to m/s
+                    wind_direction = wind_est.direction_degrees
+                    wind_gusts = max(wind_speed, wind_gusts)
+                    logging.info(f"Using wind calculator estimates: {wind_speed:.2f} m/s, {wind_direction:.1f}°")
+            except Exception as e:
+                logging.warning(f"Wind calculator failed: {e}")
+        
+        north_wind = safe_float(drone_data.get('north_m_s', 0))
+        east_wind = safe_float(drone_data.get('east_m_s', 0))
+        
+        if north_wind != 0 or east_wind != 0:
+            calculated_wind_speed = np.sqrt(north_wind**2 + east_wind**2)
+            calculated_wind_direction = (np.degrees(np.arctan2(east_wind, north_wind)) % 360)
+            
+            if calculated_wind_speed > 0:
+                wind_speed = calculated_wind_speed
+                wind_direction = calculated_wind_direction
+                wind_gusts = max(wind_speed, wind_gusts)
+        
+        base_features = {
             'hour': current_time.hour,
             'month': current_time.month,
             'relative_humidity_2m': safe_float(drone_data.get('relative_humidity_2m', 50)),
@@ -359,53 +367,72 @@ class WeatherPredictor:
             'wind_speed_10m': wind_speed,
             'wind_gusts_10m': wind_gusts,
             'wind_direction_10m': wind_direction,
-            'cloudcover': safe_float(drone_data.get('cloud_cover', 0)),
-            'altitude': altitude
+            'cloudcover': safe_float(drone_data.get('cloud_cover', 0))
         }
+        
+        features = {}
+        for feature_name in self.feature_names:
+            if feature_name in base_features:
+                features[feature_name] = base_features[feature_name]
+            else:
+                if feature_name == 'altitude':
+                    features[feature_name] = safe_float(drone_data.get('altitude', 0))
+                elif feature_name in ['temperature_2m', 'temp']:
+                    features[feature_name] = safe_float(drone_data.get('temperature_degc', 20))
+                elif feature_name in ['precipitation', 'rain']:
+                    features[feature_name] = 0.0
+                else:
+                    features[feature_name] = 0.0
+                    logging.warning(f"Feature '{feature_name}' not found in input data, using default value 0.0")
+        
+        logging.info(f"Prepared features: {list(features.keys())}")
         return pd.DataFrame([features])
 
     def predict(self, features: pd.DataFrame) -> float:
-        """Make rain prediction (precipitation in mm)"""
+        """Make prediction"""
         try:
+            if hasattr(self.scaler, 'feature_names_in_'):
+                features = features.reindex(columns=self.scaler.feature_names_in_, fill_value=0.0)
+            
             X_scaled = self.scaler.transform(features)
             prediction = self.model.predict(X_scaled)[0]
             return float(prediction)
         except Exception as e:
             logging.error(f"Prediction failed: {e}")
+            logging.error(f"Input features shape: {features.shape}")
+            logging.error(f"Input features columns: {list(features.columns)}")
+            if hasattr(self.scaler, 'feature_names_in_'):
+                logging.error(f"Expected features: {list(self.scaler.feature_names_in_)}")
             raise
 
 def process_live_prediction(data: dict):
     """Process live prediction with comprehensive error handling."""
     try:
-        # Validate required fields
-        required_fields = ['latitude', 'longitude', 'north_m_s', 'east_m_s']
+        required_fields = ['latitude', 'longitude']
         missing_fields = [field for field in required_fields if safe(data.get(field)) is None]
         
         if missing_fields:
             logging.warning(f"Missing required fields: {missing_fields}")
             return {"error": f"Missing required data fields: {missing_fields}", "input": data}
 
-        # Initialize predictor
         predictor = WeatherPredictor()
         
-        # Get coordinates
         lat = safe_float(data.get("latitude", EXPECTED_COORDS[0]))
         lon = safe_float(data.get("longitude", EXPECTED_COORDS[1]))
         
-        # Validate coordinates
         if not (-90 <= lat <= 90) or not (-180 <= lon <= 180):
             logging.warning(f"Invalid coordinates: lat={lat}, lon={lon}")
             lat, lon = EXPECTED_COORDS
         
-        # Prepare features and make prediction
-        features = predictor.prepare_drone_data(data)
-        rain_prediction = predictor.predict(features)
+        if predictor.wind_calculator:
+            predictor.wind_calculator.add_drone_data(data)
         
-        # Get additional weather data
+        features = predictor.prepare_drone_data(data)
+        prediction = predictor.predict(features)
+        
         rh, cloud_cover_percent, rh_time, rh_url = get_live_humidity(lat, lon)
         rain_chance_2h = get_rain_chance_in_2_hours(lat, lon)
         
-        # Format times and locations
         humidity_time_fmt = format_humidity_time(rh_time)
         
         drone_tz = get_timezone(lat, lon)
@@ -415,40 +442,64 @@ def process_live_prediction(data: dict):
         drone_sun = get_sunrise_sunset(lat, lon, drone_tz)
         user_sun = get_sunrise_sunset(*EXPECTED_COORDS, user_tz)
         
-        # Calculate confidence interval for rain prediction
         try:
-            preds = [predictor.predict(features) for _ in range(10)]
+            preds = [predictor.predict(features) for _ in range(5)]
             std_dev = np.std(preds)
             ci = max(round(1.96 * std_dev, 2), 0.1)
         except Exception as e:
             logging.warning(f"Failed to calculate confidence interval: {e}")
             ci = 0.1
-        # Get timestamp
+        
         now = datetime.now(timezone.utc)
         timestamp = safe(data.get("timestamp"))
         if timestamp is None:
             timestamp = now.strftime("%Y-%m-%dT%H:%M:%S")
-        # Build output
+        
+        # Get wind speed and direction from wind calculator
+        wind_speed_knots = 0.0
+        wind_direction_degrees = 0.0
+        if predictor.wind_calculator:
+            try:
+                wind_est = predictor.wind_calculator.calculate_wind_multi_method()
+                if wind_est:
+                    wind_speed_knots = round(wind_est.speed_knots, 2)
+                    wind_direction_degrees = round(wind_est.direction_degrees, 1)
+                    logging.info(f"Wind calculator output: {wind_speed_knots} knots, {wind_direction_degrees}°")
+            except Exception as e:
+                logging.warning(f"Failed to get wind estimates: {e}")
+
         output = {
             "timestamp": timestamp,
             "rain_chance_2h (%)": float(rain_chance_2h),
             "cloud_cover (%)": float(cloud_cover_percent),
-            "predicted_precipitation": round(rain_prediction, 2),
-            "confidence_range (±mm)": ci,
+            "predicted_value": round(prediction, 2),
+            "confidence_range": ci,
             "humidity (% RH)": round(rh, 1),
             "humidity_timestamp": humidity_time_fmt,
             "sunrise_at_drone_location": drone_sun['sunrise_readable'],
             "sunset_at_drone_location": drone_sun['sunset_readable'],
             "sunrise_at_user_location": user_sun['sunrise_readable'],
             "sunset_at_user_location": user_sun['sunset_readable'],
-            "info": f"95% chance the actual precipitation lies between {round(rain_prediction - ci, 2)} mm and {round(rain_prediction + ci, 2)} mm",
+            "info": f"95% confidence interval: {round(prediction - ci, 2)} to {round(prediction + ci, 2)}",
             "humidity_source": rh_url,
             "location": drone_loc,
+            "wind_speed_knots": wind_speed_knots,
+            "wind_direction_degrees": wind_direction_degrees,
             "input": data
         }
-        # Add warning if location is far from expected
+        
+        if "temperature" in str(predictor.model).lower() or "temp" in str(predictor.model).lower():
+            output["predicted_temperature"] = output["predicted_value"]
+            output["confidence_range (±°C)"] = output["confidence_range"]
+        elif "precipitation" in str(predictor.model).lower() or "rain" in str(predictor.model).lower():
+            output["predicted_precipitation"] = output["predicted_value"]
+            output["confidence_range (±mm)"] = output["confidence_range"]
+        else:
+            output["prediction_type"] = "unknown"
+        
         if abs(lat - EXPECTED_COORDS[0]) > 2 or abs(lon - EXPECTED_COORDS[1]) > 2:
             output["warning"] = f"Warning: Drone location is far from expected coordinates ({EXPECTED_COORDS})"
+        
         return output
 
     except Exception as e:
@@ -460,7 +511,6 @@ def run_tcp_client(host='127.0.0.1', port=9000, max_retries=10, retry_delay=15):
     logging.info(f"Attempting to connect to TCPLogServer at {host}:{port}")
     retry_count = 0
     
-    # Initial delay to allow MAVSDK_logger.py to start
     logging.info(f"Waiting {retry_delay} seconds before first connection attempt...")
     time.sleep(retry_delay)
     
@@ -494,7 +544,6 @@ def run_tcp_client(host='127.0.0.1', port=9000, max_retries=10, retry_delay=15):
                                 drone_data = json.loads(line)
                                 now = time.time()
                                 
-                                # Rate limiting: only process once per minute
                                 if now - last_prediction_time >= 60:
                                     result = process_live_prediction(drone_data)
                                     if "error" not in result:
@@ -546,23 +595,23 @@ def predict_from_csv(csv_path):
             logging.error("CSV file is empty")
             return
             
-        # Process the last valid row
         for idx in range(len(df)-1, -1, -1):
             row = df.iloc[idx]
             
-            # Check if row has required data
-            if not pd.isna(row.get('north_m_s')) and not pd.isna(row.get('east_m_s')):
-                data = {
-                    'timestamp': safe(row.get('timestamp')) or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S"),
-                    'relative_humidity_2m': safe_float(row.get('relative_humidity_2m', 50)),
-                    'pressure_msl': safe_float(row.get('pressure_msl', 1013)),
-                    'north_m_s': safe_float(row.get('north_m_s', 0)),
-                    'east_m_s': safe_float(row.get('east_m_s', 0)),
-                    'latitude': safe_float(row.get('latitude', EXPECTED_COORDS[0])),
-                    'longitude': safe_float(row.get('longitude', EXPECTED_COORDS[1])),
-                    'temperature_degc': safe(row.get('temperature_degc')),
-                    'cloud_cover': safe_float(row.get('cloud_cover', 0))
-                }
+            data = {}
+            for col in df.columns:
+                val = row.get(col)
+                if pd.notna(val):
+                    data[col] = val
+            
+            if data:
+                if 'timestamp' not in data:
+                    data['timestamp'] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+                
+                if 'latitude' not in data:
+                    data['latitude'] = EXPECTED_COORDS[0]
+                if 'longitude' not in data:
+                    data['longitude'] = EXPECTED_COORDS[1]
                 
                 result = process_live_prediction(data)
                 print(json.dumps(result, indent=2, ensure_ascii=False))
@@ -588,7 +637,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     try:
-        initialize_database()  # Ensure database is created at start
+        initialize_database()
         
         if args.tcp:
             run_tcp_client()
