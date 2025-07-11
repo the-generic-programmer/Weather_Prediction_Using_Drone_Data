@@ -190,8 +190,8 @@ def get_weather_data(lat, lon):
         
         if "current" in data:
             temp = data["current"].get("temperature_2m", 15)
-            rh = data["current"].get("relative_humidity_2m", 80)
-            cloud_cover = data["current"].get("cloudcover", 50)
+            rh = data["current"].get("relative_humidity_2m", 80)  # Default for Lukla
+            cloud_cover = data["current"].get("cloudcover", 50)  # Default for Lukla
             rh_time = data["current"].get("time", datetime.now(timezone.utc).isoformat())
             return temp, rh, cloud_cover, rh_time, url
         else:
@@ -227,7 +227,7 @@ def get_rain_chance_in_2_hours(lat, lon):
         
         if not isinstance(times, list) or not isinstance(chances, list) or len(times) != len(chances):
             logging.error(f"Malformed rain chance data: times={len(times) if isinstance(times, list) else 'not list'}, chances={len(chances) if isinstance(chances, list) else 'not list'}")
-            return 50
+            return 50  # Default for Lukla
         
         target_time = future_time.strftime("%Y-%m-%dT%H:00")
         for i, t in enumerate(times):
@@ -360,19 +360,19 @@ class WeatherPredictor:
         return pd.DataFrame([features])
 
     def predict(self, features: pd.DataFrame) -> float:
-        """Make prediction with improved fallback."""
+        """Make prediction."""
         try:
             if hasattr(self.scaler, 'feature_names_in_'):
                 features = features.reindex(columns=self.scaler.feature_names_in_, fill_value=0.0)
             
             X_scaled = self.scaler.transform(features)
             prediction = self.model.predict(X_scaled)[0]
-            if not (-10 <= prediction <= 40):  # Adjusted for Lukla's colder climate
-                prediction = features.get('temperature_2m', 15.0).iloc[0]
+            if not (0 <= prediction <= 40):
+                prediction = 15.0  # Default for Lukla
             return float(prediction)
         except Exception as e:
             logging.error(f"Prediction failed: {e}")
-            return 15.0  # Fallback for Lukla
+            raise
 
 def process_live_prediction(data: dict):
     """Process live prediction."""
@@ -407,7 +407,7 @@ def process_live_prediction(data: dict):
         features = predictor.prepare_drone_data(data, rh=rh, cloud_cover=cloud_cover_percent, wind_speed=wind_speed_ms, wind_direction=wind_direction_degrees)
         prediction = predictor.predict(features)
         
-        if not (-10 <= prediction <= 40):
+        if not (0 <= prediction <= 40):
             logging.warning(f"Model prediction {prediction}°C unrealistic, using API temperature {temp}°C")
             prediction = temp
         
@@ -457,6 +457,10 @@ def process_live_prediction(data: dict):
             "confidence_range (±°C)": ci
         }
         
+        # Print wind speed and direction in terminal output
+        print(f"Wind Speed: {output['wind_speed_knots']:.2f} knots")
+        print(f"Wind Direction: {output['wind_direction_degrees']:.1f}°")
+        
         return output
 
     except Exception as e:
@@ -503,6 +507,7 @@ def run_tcp_client(host='127.0.0.1', port=9000, max_retries=10, retry_delay=15):
                                 if now - last_prediction_time >= 60:
                                     result = process_live_prediction(drone_data)
                                     if "error" not in result:
+                                        # Print all output including wind speed/direction
                                         print(json.dumps(result, indent=2, ensure_ascii=False))
                                         log_prediction_to_db(result)
                                         last_prediction_time = now
