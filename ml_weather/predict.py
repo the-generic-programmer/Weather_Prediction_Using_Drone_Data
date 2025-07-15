@@ -8,16 +8,24 @@ import pandas as pd
 import numpy as np
 import requests
 import sys
-import time
 import logging
 import sqlite3
+import time
+import asyncio
 from datetime import datetime, timezone
 from astral import LocationInfo
 from astral.sun import sun
 from timezonefinder import TimezoneFinder
 from geopy.geocoders import Nominatim
 import pytz
-from wind_calculator import PrecisionWindCalculator
+
+# Try to import wind calculator - make it optional
+try:
+    from wind_calculator import PrecisionWindCalculator
+    WIND_CALCULATOR_AVAILABLE = True
+except ImportError:
+    WIND_CALCULATOR_AVAILABLE = False
+    logging.warning("Wind calculator module not available - wind calculations will be limited")
 
 # Configure logging to show only WARNING and above
 logging.basicConfig(
@@ -144,6 +152,7 @@ def log_prediction_to_db(result):
 
 MODEL_DIR = "models"
 EXPECTED_COORDS = (13.0, 77.625)  # User location: Bengaluru, India
+DRONE_COORDS = (27.6889981, 86.726715)  # Lukla coordinates as fallback
 
 try:
     tf = TimezoneFinder()
@@ -294,12 +303,17 @@ class WeatherPredictor:
                 'wind_speed_10m', 'wind_gusts_10m', 'wind_direction_10m', 'cloudcover'
             ]
             
-            try:
-                self.wind_calculator = PrecisionWindCalculator()
-            except Exception as wind_err:
-                logging.warning(f"Wind calculator failed to load: {wind_err}")
+            # Initialize wind calculator if available
+            if WIND_CALCULATOR_AVAILABLE:
+                try:
+                    self.wind_calculator = PrecisionWindCalculator()
+                except Exception as wind_err:
+                    logging.warning(f"Wind calculator failed to load: {wind_err}")
+                    self.wind_calculator = None
+            else:
                 self.wind_calculator = None
                 
+            # Load latest wind measurements
             self.latest_wind = None
             try:
                 with open("wind_measurements.json", 'r') as f:
@@ -319,21 +333,49 @@ class WeatherPredictor:
         
         wind_gusts = wind_speed
         
+        # Use latest wind measurements if available
         if self.latest_wind:
             wind_speed = safe_float(self.latest_wind.get('speed_knots', 0)) * 0.514444  # knots to m/s
             wind_direction = safe_float(self.latest_wind.get('direction_degrees', 0))
             wind_gusts = max(wind_speed, wind_gusts)
         
-        if self.wind_calculator:
+        # Use wind calculator if available
+        if self.wind_calculator and WIND_CALCULATOR_AVAILABLE:
             try:
-                self.wind_calculator.add_drone_data(drone_data)
-                wind_est = self.wind_calculator.calculate_wind_multi_method()
-                if wind_est:
-                    wind_speed = wind_est.speed_knots * 0.514444
-                    wind_direction = wind_est.direction_degrees
-                    wind_gusts = max(wind_speed, wind_gusts)
-            except Exception:
-                pass  # Silently fall back to saved wind data
+                # Use synchronous call or handle async properly
+                if hasattr(self.wind_calculator, 'add_drone_data'):
+                    # Check if it's async
+                    if asyncio.iscoroutinefunction(self.wind_calculator.add_drone_data):
+                        loop = asyncio.get_event_loop()
+                        if loop.is_running():
+                            # Create a new task if loop is running
+                            task = loop.create_task(self.wind_calculator.add_drone_data(drone_data))
+                        else:
+                            loop.run_until_complete(self.wind_calculator.add_drone_data(drone_data))
+                    else:
+                        self.wind_calculator.add_drone_data(drone_data)
+                
+                if hasattr(self.wind_calculator, 'calculate_wind_multi_method'):
+                    if asyncio.iscoroutinefunction(self.wind_calculator.calculate_wind_multi_method):
+                        loop = asyncio.get_event_loop()
+                        if loop.is_running():
+                            # For running loop, we'll skip this and use fallback
+                            pass
+                        else:
+                            wind_est = loop.run_until_complete(self.wind_calculator.calculate_wind_multi_method())
+                            if wind_est:
+                                wind_speed = wind_est.speed_knots * 0.514444
+                                wind_direction = wind_est.direction_degrees
+                                wind_gusts = max(wind_speed, wind_gusts)
+                    else:
+                        wind_est = self.wind_calculator.calculate_wind_multi_method()
+                        if wind_est:
+                            wind_speed = wind_est.speed_knots * 0.514444
+                            wind_direction = wind_est.direction_degrees
+                            wind_gusts = max(wind_speed, wind_gusts)
+            except Exception as e:
+                logging.warning(f"Wind calculator error: {e}")
+                pass  # Fall back to saved wind data
         
         features = {
             'hour': current_time.hour,
@@ -346,6 +388,7 @@ class WeatherPredictor:
             'cloudcover': cloud_cover
         }
         
+        # Handle additional features that might be required
         for feature_name in self.feature_names:
             if feature_name not in features:
                 if feature_name == 'altitude':
@@ -386,41 +429,88 @@ def process_live_prediction(data: dict):
 
         predictor = WeatherPredictor()
         
-        lat = safe_float(data.get("latitude", 27.6889981))
-        lon = safe_float(data.get("longitude", 86.726715))
+        lat = safe_float(data.get("latitude", DRONE_COORDS[0]))
+        lon = safe_float(data.get("longitude", DRONE_COORDS[1]))
         
         if not (-90 <= lat <= 90) or not (-180 <= lon <= 180):
             logging.warning(f"Invalid coordinates: lat={lat}, lon={lon}")
-            lat, lon = (27.6889981, 86.726715)
+            lat, lon = DRONE_COORDS
         
+        # Get weather data
         temp, rh, cloud_cover_percent, rh_time, rh_url = get_weather_data(lat, lon)
         rain_chance_2h = get_rain_chance_in_2_hours(lat, lon)
         
+        # Initialize wind values
         wind_speed_knots = 0.0
         wind_direction_degrees = 0.0
         wind_speed_ms = 0.0
+        
+        # Use latest wind measurements if available
         if predictor.latest_wind:
             wind_speed_knots = safe_float(predictor.latest_wind.get('speed_knots', 0))
             wind_direction_degrees = safe_float(predictor.latest_wind.get('direction_degrees', 0))
             wind_speed_ms = wind_speed_knots * 0.514444
         
+        # Use wind calculator if available
+        if predictor.wind_calculator and WIND_CALCULATOR_AVAILABLE:
+            try:
+                # Handle async properly
+                if hasattr(predictor.wind_calculator, 'add_drone_data'):
+                    if asyncio.iscoroutinefunction(predictor.wind_calculator.add_drone_data):
+                        try:
+                            loop = asyncio.get_event_loop()
+                            if not loop.is_running():
+                                loop.run_until_complete(predictor.wind_calculator.add_drone_data(data))
+                        except RuntimeError:
+                            # No event loop, create one
+                            asyncio.run(predictor.wind_calculator.add_drone_data(data))
+                    else:
+                        predictor.wind_calculator.add_drone_data(data)
+                
+                if hasattr(predictor.wind_calculator, 'calculate_wind_multi_method'):
+                    if asyncio.iscoroutinefunction(predictor.wind_calculator.calculate_wind_multi_method):
+                        try:
+                            loop = asyncio.get_event_loop()
+                            if not loop.is_running():
+                                wind_est = loop.run_until_complete(predictor.wind_calculator.calculate_wind_multi_method())
+                            else:
+                                wind_est = None  # Skip if loop is running
+                        except RuntimeError:
+                            wind_est = asyncio.run(predictor.wind_calculator.calculate_wind_multi_method())
+                    else:
+                        wind_est = predictor.wind_calculator.calculate_wind_multi_method()
+                    
+                    if wind_est:
+                        wind_speed_knots = wind_est.speed_knots
+                        wind_direction_degrees = wind_est.direction_degrees
+                        wind_speed_ms = wind_est.speed_knots * 0.514444
+            except Exception as e:
+                logging.warning(f"Wind calculator error: {e}")
+                pass  # Fall back to latest_wind or defaults
+        
+        # Prepare features and make prediction
         features = predictor.prepare_drone_data(data, rh=rh, cloud_cover=cloud_cover_percent, wind_speed=wind_speed_ms, wind_direction=wind_direction_degrees)
         prediction = predictor.predict(features)
         
+        # Validate prediction
         if not (0 <= prediction <= 40):
             logging.warning(f"Model prediction {prediction}°C unrealistic, using API temperature {temp}°C")
             prediction = temp
         
+        # Format humidity time
         humidity_time_fmt = format_humidity_time(rh_time)
         
+        # Get location information
         drone_tz = get_timezone(lat, lon)
         user_tz = get_timezone(*EXPECTED_COORDS)
         drone_loc = get_location_name(lat, lon)
         user_loc = get_location_name(*EXPECTED_COORDS)
         
+        # Get sunrise/sunset times
         drone_sun = get_sunrise_sunset(lat, lon, drone_tz)
         user_sun = get_sunrise_sunset(*EXPECTED_COORDS, user_tz)
         
+        # Calculate confidence interval
         try:
             preds = [predictor.predict(features) for _ in range(5)]
             std_dev = np.std(preds)
@@ -429,11 +519,13 @@ def process_live_prediction(data: dict):
             logging.warning(f"Failed to calculate confidence interval: {e}")
             ci = 0.1
         
+        # Handle timestamp
         now = datetime.now(timezone.utc)
         timestamp = safe(data.get("timestamp"))
         if timestamp is None:
             timestamp = now.strftime("%Y-%m-%dT%H:%M:%S")
         
+        # Create output dictionary
         output = {
             "timestamp": timestamp,
             "rain_chance_2h (%)": float(rain_chance_2h),
@@ -458,8 +550,8 @@ def process_live_prediction(data: dict):
         }
         
         # Print wind speed and direction in terminal output
-        print(f"Wind Speed: {output['wind_speed_knots']:.2f} knots")
-        print(f"Wind Direction: {output['wind_direction_degrees']:.1f}°")
+        print(f"Wind Speed: {wind_speed_knots:.2f} knots")
+        print(f"Wind Direction: {wind_direction_degrees:.1f}°")
         
         return output
 
@@ -467,19 +559,16 @@ def process_live_prediction(data: dict):
         logging.error(f"Prediction Error: {e}")
         return {"error": f"Prediction Error: {str(e)}", "input": data}
 
-def run_tcp_client(host='127.0.0.1', port=9000, max_retries=10, retry_delay=15):
-    """Run TCP client to receive drone data."""
+def run_tcp_client(host='127.0.0.1', port=9000, retry_delay=5):
+    """Run TCP client to receive drone data continuously."""
     logging.warning(f"Attempting to connect to TCPLogServer at {host}:{port}")
-    retry_count = 0
     
-    time.sleep(retry_delay)
-    
-    while retry_count < max_retries:
+    while True:
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.settimeout(10)
                 s.connect((host, port))
-                logging.warning("Connected to TCP server. Waiting for data...")
+                logging.warning("Connected to TCP server. Starting data processing...")
                 
                 buffer = ''
                 last_prediction_time = 0
@@ -488,7 +577,7 @@ def run_tcp_client(host='127.0.0.1', port=9000, max_retries=10, retry_delay=15):
                     try:
                         data = s.recv(4096)
                         if not data:
-                            logging.warning("Connection closed by server.")
+                            logging.warning("Connection closed by server. Reconnecting...")
                             break
                             
                         buffer += data.decode('utf-8', errors='ignore')
@@ -504,7 +593,7 @@ def run_tcp_client(host='127.0.0.1', port=9000, max_retries=10, retry_delay=15):
                                 drone_data = json.loads(line)
                                 now = time.time()
                                 
-                                if now - last_prediction_time >= 60:
+                                if now - last_prediction_time >= 60:  # Predict every 60 seconds
                                     result = process_live_prediction(drone_data)
                                     if "error" not in result:
                                         # Print all output including wind speed/direction
@@ -522,24 +611,12 @@ def run_tcp_client(host='127.0.0.1', port=9000, max_retries=10, retry_delay=15):
                     except socket.timeout:
                         continue
                         
-                return
-                
         except ConnectionRefusedError as e:
-            retry_count += 1
-            logging.error(f"Connection attempt {retry_count}/{max_retries} failed: Connection refused")
-            if retry_count < max_retries:
-                time.sleep(retry_delay)
-            else:
-                logging.error("Max retries reached. Could not connect to server.")
-                sys.exit(1)
+            logging.error(f"Connection failed: {e}. Retrying in {retry_delay} seconds...")
+            time.sleep(retry_delay)
         except Exception as e:
-            retry_count += 1
-            logging.error(f"Connection attempt {retry_count}/{max_retries} failed: {e}")
-            if retry_count < max_retries:
-                time.sleep(retry_delay)
-            else:
-                logging.error("Max retries reached. Could not connect to server.")
-                sys.exit(1)
+            logging.error(f"Unexpected error: {e}. Retrying in {retry_delay} seconds...")
+            time.sleep(retry_delay)
 
 def predict_from_csv(csv_path):
     """Make prediction from CSV file."""
@@ -553,6 +630,7 @@ def predict_from_csv(csv_path):
             logging.error("CSV file is empty")
             return
             
+        # Process the last valid row
         for idx in range(len(df)-1, -1, -1):
             row = df.iloc[idx]
             
@@ -563,13 +641,14 @@ def predict_from_csv(csv_path):
                     data[col] = val
             
             if data:
+                # Add default values if missing
                 if 'timestamp' not in data:
                     data['timestamp'] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
                 
                 if 'latitude' not in data:
-                    data['latitude'] = 27.6889981
+                    data['latitude'] = DRONE_COORDS[0]
                 if 'longitude' not in data:
-                    data['longitude'] = 86.726715
+                    data['longitude'] = DRONE_COORDS[1]
                 
                 result = process_live_prediction(data)
                 print(json.dumps(result, indent=2, ensure_ascii=False))
