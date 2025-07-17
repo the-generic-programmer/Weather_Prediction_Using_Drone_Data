@@ -9,9 +9,9 @@ import numpy as np
 from collections import deque
 from dataclasses import dataclass
 from typing import Optional, List, Tuple
-from mavsdk import System
 import time
 from datetime import datetime
+import sys
 
 # Configure logging for detailed output
 logging.basicConfig(level=logging.INFO, 
@@ -455,9 +455,31 @@ def _direction_to_compass(angle: float) -> str:
     return directions[idx]
 
 # Main entry point
+
+def parse_args():
+    import argparse
+    parser = argparse.ArgumentParser(description="Precision Wind Calculator - TCP Client")
+    parser.add_argument('--host', type=str, default='127.0.0.1', help='TCP server host (default: 127.0.0.1)')
+    parser.add_argument('--port', type=int, default=9000, help='TCP server port (default: 9000)')
+    return parser.parse_args()
+
+async def check_tcp_server(host, port, timeout=3):
+    try:
+        reader, writer = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=timeout)
+        writer.close()
+        await writer.wait_closed()
+        return True
+    except Exception:
+        return False
+
 async def main():
+    args = parse_args()
+    # Check TCP server availability before proceeding
+    if not await check_tcp_server(args.host, args.port):
+        print(f"[ERROR] TCP server not available at {args.host}:{args.port}. Make sure MAVSDK_logger.py is running and TCP logging is enabled.")
+        sys.exit(1)
     calculator = PrecisionWindCalculator()
-    tcp_client = TCPClient(host="127.0.0.1", port=9000)  # Adjust host/port if needed
+    tcp_client = TCPClient(host=args.host, port=args.port)
     await monitor_drone(calculator, tcp_client)
 
 if __name__ == "__main__":

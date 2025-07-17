@@ -1,0 +1,239 @@
+[2025-07-16 12:22:06] INFO: Starting MAVSDK logger...
+[2025-07-16 12:22:06] INFO: SQLite table created or exists
+[2025-07-16 12:22:06] INFO: SQLite connection closed
+[2025-07-16 12:22:06] INFO: Databases initialized successfully
+[2025-07-16 12:22:06] INFO: Select logging options (comma separated, e.g. sql,csv,tcp):
+[2025-07-16 12:22:06] INFO: Options: sql, csv, tcp
+[2025-07-16 12:22:52] ERROR: Fatal error: [Errno 5] Input/output error
+[2025-07-16 12:24:52] INFO: Starting MAVSDK logger...
+[2025-07-16 12:24:52] INFO: SQLite table created or exists
+[2025-07-16 12:24:52] INFO: SQLite connection closed
+[2025-07-16 12:24:52] INFO: Databases initialized successfully
+[2025-07-16 12:24:52] INFO: Select logging options (comma separated, e.g. sql,csv,tcp):
+[2025-07-16 12:24:52] INFO: Options: sql, csv, tcp
+[2025-07-16 12:41:58] INFO: Shutdown signal received...
+[2025-07-16 12:41:58] INFO: Shutdown signal received...
+[2025-07-16 12:42:31] ERROR: Fatal error: [Errno 5] Input/output error
+[2025-07-16 12:42:33] INFO: Starting MAVSDK logger...
+[2025-07-16 12:42:33] INFO: SQLite table created or exists
+[2025-07-16 12:42:33] INFO: SQLite connection closed
+[2025-07-16 12:42:33] INFO: Databases initialized successfully
+[2025-07-16 12:42:33] INFO: Select logging options (comma separated, e.g. sql,csv,tcp):
+[2025-07-16 12:42:33] INFO: Options: sql, csv, tcp
+[2025-07-16 15:31:51] INFO: Shutdown signal received...
+[2025-07-16 15:31:51] INFO: Shutdown signal received...
+[2025-07-16 15:38:59] INFO: Starting MAVSDK logger...
+[2025-07-16 15:38:59] INFO: SQLite table created or exists
+[2025-07-16 15:38:59] INFO: SQLite connection closed
+[2025-07-16 15:38:59] INFO: Databases initialized successfully
+[2025-07-16 15:38:59] INFO: Select logging options (comma separated, e.g. sql,csv,tcp):
+[2025-07-16 15:38:59] INFO: Options: sql, csv, tcp
+[2025-07-16 15:39:03] INFO: Logging options: sql=False, csv=True, tcp=True
+[2025-07-16 15:39:03] INFO: Using TCP port 9000 for predict.py connection
+[2025-07-16 15:39:03] INFO: TCP server started on port 9000
+[2025-07-16 15:39:03] INFO: Attempting to connect to drone...
+[2025-07-16 15:39:04] INFO: Drone connected successfully
+[2025-07-16 15:39:04] INFO: Drone core is ready
+[2025-07-16 15:39:04] INFO: Using real drone data
+[2025-07-16 15:39:04] INFO: Logging started. Waiting for drone connection. Press Ctrl+C to stop.
+[2025-07-16 15:39:09] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:39:14] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:39:19] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:39:24] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:39:29] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:39:34] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:39:39] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:39:44] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:39:49] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:39:54] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:39:59] INFO: Flushed 19 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:40:04] INFO: Flushed 22 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:40:09] INFO: Flushed 19 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:40:14] INFO: Flushed 21 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:40:19] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:40:24] INFO: Flushed 19 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:40:29] INFO: Flushed 21 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:40:34] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:40:39] INFO: Flushed 19 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:40:44] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:40:49] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:40:54] INFO: Flushed 21 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:40:59] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:41:04] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:41:09] INFO: Flushed 21 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:41:14] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:41:19] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:41:24] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:41:29] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:41:34] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:41:39] INFO: Flushed 19 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:41:44] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:41:49] INFO: Flushed 21 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:41:54] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:41:59] INFO: Flushed 19 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:42:04] INFO: Flushed 21 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:42:09] INFO: Flushed 19 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:42:14] INFO: Flushed 21 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:42:19] INFO: Flushed 19 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:42:24] INFO: Flushed 21 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:42:29] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:42:34] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:42:39] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:42:44] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:42:49] INFO: Flushed 19 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:42:54] INFO: Flushed 21 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:42:59] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:43:04] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:43:09] INFO: Flushed 19 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:43:14] INFO: Flushed 21 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:43:19] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:43:24] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:43:29] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:43:34] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:43:39] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:43:44] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:43:49] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:43:54] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:43:59] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:44:04] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:44:09] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:44:14] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:44:19] INFO: Flushed 21 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:44:24] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:44:29] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:44:34] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:44:39] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:44:44] INFO: Flushed 21 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:44:49] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:44:54] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:44:59] INFO: Flushed 19 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:45:04] INFO: Flushed 21 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:45:09] INFO: Flushed 18 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:45:14] INFO: Flushed 21 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:45:19] INFO: Flushed 21 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:45:24] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:45:29] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:45:34] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:45:39] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:45:44] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:45:49] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:45:54] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:45:57] WARNING: Drone disconnected!
+[2025-07-16 15:45:59] INFO: Flushed 9 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:46:04] INFO: Flushed 17 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:46:09] INFO: Flushed 12 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:46:14] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:46:19] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:46:24] INFO: Flushed 21 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:46:29] INFO: Flushed 19 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:46:34] INFO: Flushed 21 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:46:39] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:46:44] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:46:49] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:46:54] INFO: Flushed 19 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:46:59] INFO: Flushed 21 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:47:04] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:47:09] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:47:14] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:47:19] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:47:24] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:47:29] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:47:34] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:47:39] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:47:44] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:47:49] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:47:54] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:47:59] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:48:04] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:48:09] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:48:14] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:48:19] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:48:24] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:48:29] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:48:34] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:48:39] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:48:44] INFO: Flushed 11 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:48:49] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:48:54] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:48:59] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:49:04] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:49:09] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:49:14] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:49:19] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:49:24] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:49:29] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:49:34] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:49:39] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:49:44] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:49:49] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:49:54] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:49:59] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:50:04] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:50:09] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:50:14] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:50:19] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:50:24] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:50:29] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:50:34] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:50:39] INFO: Flushed 21 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:50:44] INFO: Flushed 19 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:50:49] INFO: Flushed 21 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:50:54] INFO: Flushed 13 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:50:59] INFO: Flushed 18 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:51:04] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:51:09] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:51:14] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:51:19] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:51:24] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:51:29] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:51:34] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:51:39] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:51:44] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:51:49] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:51:54] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:51:59] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:52:04] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:52:09] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:52:14] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:52:19] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:52:24] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:52:29] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:52:34] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:52:39] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:52:44] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:52:49] INFO: Flushed 20 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:52:54] INFO: Flushed 13 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:52:59] INFO: Flushed 18 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 15:53:04] INFO: Flushed 15 rows to mavsdk_logs/drone_log_20250716_100859.csv
+[2025-07-16 16:02:23] INFO: Starting MAVSDK logger...
+[2025-07-16 16:02:23] INFO: SQLite table created or exists
+[2025-07-16 16:02:23] INFO: SQLite connection closed
+[2025-07-16 16:02:23] INFO: Databases initialized successfully
+[2025-07-16 16:02:23] INFO: Select logging options (comma separated, e.g. sql,csv,tcp):
+[2025-07-16 16:02:23] INFO: Options: sql, csv, tcp
+[2025-07-16 16:35:28] INFO: Starting MAVSDK logger...
+[2025-07-16 16:35:28] INFO: SQLite table created or exists
+[2025-07-16 16:35:28] INFO: SQLite connection closed
+[2025-07-16 16:35:28] INFO: Databases initialized successfully
+[2025-07-16 16:35:28] INFO: Select logging options (comma separated, e.g. sql,csv,tcp):
+[2025-07-16 16:35:28] INFO: Options: sql, csv, tcp
+[2025-07-16 16:35:28] ERROR: Fatal error: EOF when reading a line
+[2025-07-16 16:36:21] INFO: Starting MAVSDK logger...
+[2025-07-16 16:36:21] INFO: SQLite table created or exists
+[2025-07-16 16:36:21] INFO: SQLite connection closed
+[2025-07-16 16:36:21] INFO: Databases initialized successfully
+[2025-07-16 16:36:21] INFO: Select logging options (comma separated, e.g. sql,csv,tcp):
+[2025-07-16 16:36:21] INFO: Options: sql, csv, tcp
+[2025-07-16 16:36:21] INFO: No input detected, defaulting to: csv,tcp
+[2025-07-16 16:36:21] INFO: Logging options: sql=False, csv=True, tcp=True
+[2025-07-16 16:36:21] ERROR: No available ports in range 9000 to 8999
+[2025-07-16 16:36:21] ERROR: No available ports. Please free a port or configure a different one.
+[2025-07-16 16:36:21] ERROR: Error starting TCP server: No available ports. Please free port or configure a different one.
+[2025-07-16 16:36:21] ERROR: Failed to start TCP server: No available ports. Please free port or configure a different one.
+[2025-07-16 16:37:12] INFO: Shutdown signal received...
+[2025-07-16 16:37:12] INFO: Logging options: sql=False, csv=False, tcp=False
+[2025-07-16 16:37:12] INFO: Attempting to connect to drone...
+[2025-07-16 16:37:21] INFO: Shutdown signal received...
+[2025-07-16 16:37:22] INFO: Shutdown signal received...
+[2025-07-16 16:37:23] INFO: Shutdown signal received...
+[2025-07-16 20:08:02] ERROR: Fatal error: [Errno 5] Input/output error

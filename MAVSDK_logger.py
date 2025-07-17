@@ -15,15 +15,15 @@ import sqlite3
 from mavsdk import System
 import os
 
+LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+LOG_FILE = os.path.join(LOG_DIR, "mavsdk_logger.log")
+
 # Configure logging (INFO level for minimal terminal output)
 logging.basicConfig(
     level=logging.INFO,
     format='[%(asctime)s] %(levelname)s: %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S',
-    handlers=[
-        logging.FileHandler('mavsdk_logger.log'),
-        logging.StreamHandler()
-    ]
+    handlers=[logging.FileHandler(LOG_FILE), logging.StreamHandler()]
 )
 
 # Ensure database directory exists
@@ -37,7 +37,7 @@ CSV_FILE = LOG_DIR / f"drone_log_{datetime.datetime.utcnow().strftime('%Y%m%d_%H
 
 # TCP config
 TCP_PORT = 9000
-PORT_RANGE = 50  # Try ports 9000–9049
+PORT_RANGE = 50 # Try ports 9000–9049
 MAVSDK_STREAM_RATE = 20.0  # Hz
 TCP_STREAM_RATE = 5.0  # Hz
 shutdown_flag = False
@@ -51,36 +51,15 @@ def find_free_port(start_port: int, max_attempts: int = PORT_RANGE) -> Optional[
                 s.bind(("0.0.0.0", port))
                 logging.info(f"Using TCP port {port} for predict.py connection")
                 return port
-        except OSError as e:
-            logging.debug(f"Port {port} is in use: {e}")
+        except OSError:
+            continue
     logging.error(f"No available ports in range {start_port} to {start_port + max_attempts - 1}")
     return None
 
 def prompt_for_port() -> Optional[int]:
     """Prompt user for a custom port."""
-    print(f"No available ports in range {TCP_PORT} to {TCP_PORT + PORT_RANGE - 1}.")
-    print("Enter a custom port (1024–65535) or press Enter to exit:")
-    try:
-        user_input = input("Custom port: ").strip()
-        if not user_input:
-            return None
-        port = int(user_input)
-        if 1024 <= port <= 65535:
-            try:
-                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                    s.bind(("0.0.0.0", port))
-                    logging.info(f"Using custom TCP port {port} for predict.py connection")
-                    return port
-            except OSError:
-                logging.error(f"Custom port {port} is in use")
-                return None
-        else:
-            logging.error("Port must be between 1024 and 65535")
-            return None
-    except ValueError:
-        logging.error("Invalid port number")
-        return None
+    logging.error("No available ports. Please free a port or configure a different one.")
+    return None
 
 class WeatherSQLiteLogger:
     def __init__(self):
@@ -100,7 +79,7 @@ class WeatherSQLiteLogger:
         self.lock = Lock()  # Added thread safety
         self._setup()
 
-    def _setup(self):
+    def _setup(self) -> None:
         try:
             # Ensure directory is writable
             if not self.db_path.parent.exists():
@@ -121,7 +100,7 @@ class WeatherSQLiteLogger:
             logging.error(f"SQLite setup failed: {e}")
             raise
 
-    def log(self, row):
+    def log(self, row: Dict[str, Any]) -> None:
         if not self.cursor:
             return
         try:
@@ -136,7 +115,7 @@ class WeatherSQLiteLogger:
         except Exception as e:
             logging.error(f"SQLite insert failed: {e}")
 
-    def close(self):
+    def close(self) -> None:
         try:
             with self.lock:
                 if self.cursor:
@@ -156,14 +135,13 @@ class TCPServer:
         self.server_socket: Optional[socket.socket] = None
         self.accept_thread: Optional[Thread] = None
 
-    def start(self):
+    def start(self) -> None:
         try:
             found_port = find_free_port(self.port)
             if not found_port:
                 found_port = prompt_for_port()
                 if not found_port:
                     raise OSError("No available ports. Please free port or configure a different one.")
-            
             self.port = found_port
             self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -177,7 +155,7 @@ class TCPServer:
             logging.error(f"Error starting TCP server: {e}")
             raise
 
-    def _accept_clients(self):
+    def _accept_clients(self) -> None:
         while self.running:
             try:
                 if self.server_socket:
@@ -193,7 +171,7 @@ class TCPServer:
                     logging.error(f"Error accepting client: {e}")
                 break
 
-    def send(self, data: Dict[str, Any]):
+    def send(self, data: Dict[str, Any]) -> None:
         if not self.clients:
             return
         try:
@@ -215,7 +193,7 @@ class TCPServer:
         except Exception as e:
             logging.error(f"Error sending data: {e}")
 
-    def stop(self):
+    def stop(self) -> None:
         logging.info("Stopping TCP server...")
         self.running = False
         with self.lock:
@@ -253,7 +231,7 @@ class CSVLogger:
         self.seq = 0
         self.headers_written = False
 
-    def log(self, source: str, data_dict: Dict[str, Any]):
+    def log(self, source: str, data_dict: Dict[str, Any]) -> None:
         try:
             self.seq += 1
             row = {
@@ -270,7 +248,7 @@ class CSVLogger:
         except Exception as e:
             logging.error(f"Error logging data: {e}")
 
-    def flush(self):
+    def flush(self) -> None:
         try:
             with self.lock:
                 if not self.rows:
@@ -296,7 +274,7 @@ def signal_handler(signum, frame):
     logging.info("Shutdown signal received...")
     shutdown_flag = True
 
-def initialize_databases():
+def initialize_databases() -> None:
     try:
         weather_sql_logger = WeatherSQLiteLogger()
         weather_sql_logger.close()
@@ -305,7 +283,7 @@ def initialize_databases():
         logging.error(f"Failed to initialize databases: {e}")
         raise
 
-async def connect_drone(drone: System):
+async def connect_drone(drone: System) -> bool:
     """Wait indefinitely for drone connection."""
     try:
         logging.info("Attempting to connect to drone...")
@@ -324,15 +302,29 @@ async def connect_drone(drone: System):
         logging.error(f"Error connecting to drone: {e}")
     return False
 
-async def run():
+async def run() -> None:
     global shutdown_flag
 
-    print("Select logging options (comma separated, e.g. sql,csv,tcp):")
-    print("Options: sql, csv, tcp")
-    user_input = input("Log to (default: csv,tcp): ").strip().lower()
+    import argparse
+    parser = argparse.ArgumentParser(description="MAVSDK Logger")
+    parser.add_argument('--log-to', type=str, default=None, help='Comma separated logging options: sql,csv,tcp')
+    args, _ = parser.parse_known_args()
+
+    user_input = None
+    if args.log_to:
+        user_input = args.log_to.strip().lower()
+        logging.info(f"Logging options provided via --log-to: {user_input}")
+    else:
+        logging.info("Select logging options (comma separated, e.g. sql,csv,tcp):")
+        logging.info("Options: sql, csv, tcp")
+        try:
+            user_input = input("Log to (default: csv,tcp): ").strip().lower()
+        except EOFError:
+            user_input = "csv,tcp"
+            logging.info("No input detected, defaulting to: csv,tcp")
     if not user_input or user_input == "default":
         user_input = "csv,tcp"
-    
+
     log_to_sql = "sql" in user_input.split(',')
     log_to_csv = "csv" in user_input.split(',')
     log_to_tcp = "tcp" in user_input.split(',')
@@ -381,7 +373,7 @@ async def run():
     }
     data_lock = Lock()
 
-    def log_all(source: str, data: Dict[str, Any]):
+    def log_all(source: str, data: Dict[str, Any]) -> None:
         """Centralized logging function"""
         try:
             row = {**data, 'source': source}
@@ -402,7 +394,7 @@ async def run():
         except Exception as e:
             logging.error(f"Error in log_all: {e}")
 
-    async def stream_telemetry():
+    async def stream_telemetry() -> None:
         """Combined telemetry streaming function"""
         try:
             # Real drone data streaming
@@ -492,7 +484,7 @@ async def run():
         except Exception as e:
             logging.error(f"Error in stream_telemetry: {e}")
 
-    async def periodic_flush():
+    async def periodic_flush() -> None:
         """Periodic CSV flushing"""
         if not log_to_csv or not logger:
             return
@@ -503,7 +495,7 @@ async def run():
         except Exception as e:
             logging.error(f"Error in periodic_flush: {e}")
 
-    async def monitor_connection():
+    async def monitor_connection() -> None:
         """Monitor drone connection"""
         try:
             async for state in drone.core.connection_state():
