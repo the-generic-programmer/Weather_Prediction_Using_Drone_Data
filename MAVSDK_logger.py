@@ -14,6 +14,8 @@ from typing import Optional, Dict, Any, List
 import sqlite3
 from mavsdk import System
 import os
+import math
+from datetime import UTC
 
 LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
 LOG_FILE = os.path.join(LOG_DIR, "mavsdk_logger.log")
@@ -33,11 +35,11 @@ DB_PATH = DB_DIR / "weather_mavsdk_logger.db"
 logging.debug(f"DB_PATH: {DB_PATH}")
 LOG_DIR = Path("mavsdk_logs")
 LOG_DIR.mkdir(exist_ok=True)
-CSV_FILE = LOG_DIR / f"drone_log_{datetime.datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.csv"
+CSV_FILE = LOG_DIR / f"drone_log_{datetime.datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}.csv"
 
 # TCP config
 TCP_PORT = 9000
-PORT_RANGE = 50 # Try ports 9000–9049
+PORT_RANGE = 50  # Try ports 9000–9049
 MAVSDK_STREAM_RATE = 20.0  # Hz
 TCP_STREAM_RATE = 5.0  # Hz
 shutdown_flag = False
@@ -68,11 +70,11 @@ class WeatherSQLiteLogger:
         self.fields = [
             "timestamp", "latitude", "longitude", "altitude_from_sealevel", "relative_altitude",
             "voltage", "remaining_percent", "north_m_s", "east_m_s", "down_m_s",
-            "temperature_degc", "roll_deg", "pitch_deg", "yaw_deg",
+            "temperature_degc", "pressure_hpa", "roll_deg", "pitch_deg", "yaw_deg",
             "angular_velocity_forward_rad_s", "angular_velocity_right_rad_s", "angular_velocity_down_rad_s",
             "linear_acceleration_forward_m_s2", "linear_acceleration_right_m_s2", "linear_acceleration_down_m_s2",
             "magnetic_field_forward_gauss", "magnetic_field_right_gauss", "magnetic_field_down_gauss",
-            "system_time", "unix_time", "speed_m_s", "direction_deg"
+            "system_time", "unix_time", "speed_m_s", "direction_deg", "airspeed_m_s"
         ]
         self.conn = None
         self.cursor = None
@@ -217,11 +219,11 @@ class CSVLogger:
         "timestamp", "source", "sequence",
         "latitude", "longitude", "altitude_from_sealevel", "relative_altitude",
         "voltage", "remaining_percent", "north_m_s", "east_m_s", "down_m_s",
-        "temperature_degc", "roll_deg", "pitch_deg", "yaw_deg",
+        "temperature_degc", "pressure_hpa", "roll_deg", "pitch_deg", "yaw_deg",
         "angular_velocity_forward_rad_s", "angular_velocity_right_rad_s", "angular_velocity_down_rad_s",
         "linear_acceleration_forward_m_s2", "linear_acceleration_right_m_s2", "linear_acceleration_down_m_s2",
         "magnetic_field_forward_gauss", "magnetic_field_right_gauss", "magnetic_field_down_gauss",
-        "system_time", "unix_time", "speed_m_s", "direction_deg"
+        "system_time", "unix_time", "speed_m_s", "direction_deg", "airspeed_m_s"
     ]
     
     def __init__(self, file_path: Path):
@@ -235,7 +237,7 @@ class CSVLogger:
         try:
             self.seq += 1
             row = {
-                "timestamp": datetime.datetime.utcnow().isoformat(timespec='milliseconds') + 'Z',
+                "timestamp": datetime.datetime.now(datetime.UTC).isoformat(timespec='milliseconds') + 'Z',
                 "source": source,
                 "sequence": self.seq
             }
@@ -287,7 +289,6 @@ async def connect_drone(drone: System) -> bool:
     """Wait indefinitely for drone connection."""
     try:
         logging.info("Attempting to connect to drone...")
-        # FIXED: Changed from port 14540 to 14550 to match SITL output
         await drone.connect(system_address="udp://:14550")
         logging.info("Drone connected successfully")
         
@@ -369,6 +370,7 @@ async def run() -> None:
         'latest_position': {},
         'latest_battery': {},
         'latest_velocity': {},
+        'latest_airspeed': {},
         'latest_wind': {}
     }
     data_lock = Lock()
@@ -377,20 +379,18 @@ async def run() -> None:
         """Centralized logging function"""
         try:
             row = {**data, 'source': source}
-            
+            row["system_time"] = datetime.datetime.now().isoformat(timespec='milliseconds') + 'Z'
+            row["unix_time"] = str(int(datetime.datetime.now(UTC).timestamp()))
             if log_to_csv and logger:
                 logger.log(source, row)
-            
             if log_to_sql and weather_sql_logger:
                 weather_sql_logger.log(row)
-            
             if log_to_tcp and tcp_server:
                 required_fields = ['latitude', 'longitude']
                 if all(field in row and row[field] is not None for field in required_fields):
                     tcp_server.send(row)
                 else:
                     logging.debug(f"Skipped TCP send, missing required fields: {row}")
-                    
         except Exception as e:
             logging.error(f"Error in log_all: {e}")
 
@@ -415,6 +415,7 @@ async def run() -> None:
                         combined_data = {}
                         for category in shared_data.values():
                             combined_data.update(category)
+                        logging.debug(f"Combined data: {combined_data}")
                     log_all("position", combined_data)
             
             async def stream_attitude():
@@ -433,10 +434,17 @@ async def run() -> None:
                 async for vel in drone.telemetry.velocity_ned():
                     if shutdown_flag:
                         break
+                    north_ms = getattr(vel, 'north_m_s', None)
+                    east_ms = getattr(vel, 'east_m_s', None)
+                    down_ms = getattr(vel, 'down_m_s', None)
+                    speed_ms = (math.sqrt(north_ms**2 + east_ms**2) if north_ms is not None and east_ms is not None else None)
+                    direction_deg = (math.degrees(math.atan2(east_ms, north_ms)) % 360 if north_ms is not None and east_ms is not None else None)
                     data = {
-                        "north_m_s": getattr(vel, 'north_m_s', None),
-                        "east_m_s": getattr(vel, 'east_m_s', None),
-                        "down_m_s": getattr(vel, 'down_m_s', None),
+                        "north_m_s": north_ms,
+                        "east_m_s": east_ms,
+                        "down_m_s": down_ms,
+                        "speed_m_s": speed_ms,
+                        "direction_deg": direction_deg
                     }
                     with data_lock:
                         shared_data['latest_velocity'] = data
@@ -467,16 +475,28 @@ async def run() -> None:
                         "magnetic_field_right_gauss": getattr(imu.magnetic_field_frd, 'right_gauss', None),
                         "magnetic_field_down_gauss": getattr(imu.magnetic_field_frd, 'down_gauss', None),
                         "temperature_degc": getattr(imu, 'temperature_degc', None),
+                        "pressure_hpa": getattr(imu, 'pressure_hpa', None),
                     }
+                    logging.debug(f"IMU data: {data}")
                     with data_lock:
                         shared_data['latest_imu'] = data
             
+            async def stream_airspeed():
+                async for airspeed in drone.telemetry.airspeed():
+                    if shutdown_flag:
+                        break
+                    data = {"airspeed_m_s": getattr(airspeed, 'indicated_airspeed_m_s', None)}
+                    logging.debug(f"Airspeed data: {data}")
+                    with data_lock:
+                        shared_data['latest_airspeed'] = data
+
             tasks = [
                 asyncio.create_task(stream_position()),
                 asyncio.create_task(stream_attitude()),
                 asyncio.create_task(stream_velocity()),
                 asyncio.create_task(stream_battery()),
                 asyncio.create_task(stream_imu()),
+                asyncio.create_task(stream_airspeed()),
             ]
             
             await asyncio.gather(*tasks, return_exceptions=True)
