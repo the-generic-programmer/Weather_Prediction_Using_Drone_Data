@@ -568,27 +568,75 @@ async def run() -> None:
         async for sp in drone.telemetry.scaled_pressure():
             if shutdown_flag:
                 break
-            abs_hpa = _clean(getattr(sp, 'absolute_pressure_hpa', None))
-            diff_hpa = _clean(getattr(sp, 'differential_pressure_hpa', None))
+            abs_hpa = _clean(getattr(sp, 'absolute_pressure_hpa', None))   # Static / ambient pressure
+            diff_hpa = _clean(getattr(sp, 'differential_pressure_hpa', None))  # Dynamic vs static (Pitot)
             temp_deg = _clean(getattr(sp, 'temperature_deg', None))
-            data = {
-                "pressure_hpa": abs_hpa,
-            }
-            # Use temp_deg if IMU temp missing (don't overwrite if present)
+
+            # Always store static pressure
+            data = {"pressure_hpa": abs_hpa}
+
+            # Use temp_deg if IMU temp missing (don't overwrite good value)
             if temp_deg is not None and shared_data['imu'].get('temperature_degc') is None:
                 shared_data['imu']['temperature_degc'] = temp_deg
 
-            # Optionally compute fallback airspeed from differential pressure if fixedwing_metrics not present
-            if diff_hpa is not None:
-                # placeholder compute; will be overridden by fixedwing_metrics if available
-                rho = None  # if you have local air density, fill here
-                if rho and diff_hpa is not None:
-                    dp_pa = diff_hpa * 100.0
-                    data['_airspeed_dp_fallback_m_s'] = math.sqrt(max(0.0, 2.0 * dp_pa / rho))
+            # Save into shared state (include diff pressure for fallback use)
             with data_lock:
                 shared_data['pressure'] = data
+                if diff_hpa is not None:
+                    shared_data['pressure']['diff_pressure_hpa'] = diff_hpa
+
+    async def compute_fallback_airspeed():
+        """Compute airspeed using differential pressure if real sensor missing."""
+        with data_lock:
+            diff_hpa = shared_data['pressure'].get('diff_pressure_hpa') if 'pressure' in shared_data else None
+            abs_hpa = shared_data['pressure'].get('pressure_hpa') if 'pressure' in shared_data else None
+            temp_deg = shared_data['imu'].get('temperature_degc') if 'imu' in shared_data else None
+
+        if diff_hpa is None:
+            logging.warning("⚠️ No differential pressure → cannot compute fallback airspeed")
+            return
+
+        # Convert hPa → Pa
+        dp_pa = diff_hpa * 100.0
+        abs_pa = abs_hpa * 100.0 if abs_hpa is not None else 101325.0  # fallback to std sea level pressure
+        temp_k = (temp_deg + 273.15) if temp_deg is not None else 288.15  # fallback ~15C std temp
+
+        # Air density using Ideal Gas Law: rho = P / (R * T)
+        R = 287.05  # J/(kg*K)
+        rho = abs_pa / (R * temp_k)
+
+        # Airspeed: V = sqrt(2 * dP / rho)
+        fallback_airspeed = math.sqrt(max(0.0, 2.0 * dp_pa / rho))
+        logging.warning(f"⚠️ Using fallback airspeed calculation: {fallback_airspeed:.2f} m/s (sensor unavailable)")
+
+        with data_lock:
+            shared_data['airspeed'] = {"airspeed_m_s": round(fallback_airspeed, 3)}
+            shared_data['airspeed']['airspeed_source'] = 'calculated'
 
     async def stream_airspeed():
+        """Get airspeed from fixedwing_metrics() if available; else compute fallback."""
+        try:
+            async for fwm in drone.telemetry.fixedwing_metrics():
+                if shutdown_flag:
+                    break
+                real_airspeed = _clean(getattr(fwm, 'airspeed_m_s', None))
+
+                if real_airspeed is not None:
+                    # ✅ Real sensor airspeed (Pitot tube via autopilot)
+                    data = {"airspeed_m_s": real_airspeed, "airspeed_source": 'sensor'}
+                    with data_lock:
+                        shared_data['airspeed'] = data  # updated with source flag where
+                else:
+                    # No direct sensor reading → fallback attempt
+                    await compute_fallback_airspeed()
+        except Exception as e:
+            logging.warning(f"fixedwing_metrics stream unavailable: {e}")
+            # Even if stream not available, periodically attempt fallback
+            while not shutdown_flag:
+                await compute_fallback_airspeed()
+                await asyncio.sleep(1)
+
+    
         """Get airspeed from fixedwing_metrics() if available."""
         try:
             async for fwm in drone.telemetry.fixedwing_metrics():
@@ -598,7 +646,7 @@ async def run() -> None:
                     "airspeed_m_s": _clean(getattr(fwm, 'airspeed_m_s', None))
                 }
                 with data_lock:
-                    shared_data['airspeed'] = data
+                    shared_data['airspeed'] = data  # updated with source flag where
         except Exception as e:  # If vehicle doesn't publish fixedwing metrics
             logging.warning(f"fixedwing_metrics stream unavailable: {e}")
 
