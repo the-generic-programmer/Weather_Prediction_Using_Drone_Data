@@ -1,0 +1,458 @@
+#!/usr/bin/env python3
+"""
+Precision Wind Estimator
+========================
+
+Calculates **wind speed & direction** from live MAVSDK telemetry (via
+`mavsdk_logger.py` TCP JSON stream) *or* from a CSV file exported by the logger.
+
+### Why this version?
+You reported that the simple "wind = ground − air" formula was giving ~5–6 m/s
+(~10–12 kt) winds when the real wind was ~10 kt from ~180°. The main causes:
+
+* Airspeed sensor bias / scale error.
+* Heading ≠ actual track (crab angle) when crosswind present.
+* Occasional missing data fields.
+
+This script fixes that by solving a **small least‑squares system across recent
+samples** to estimate the **wind vector and an airspeed scale+bias correction**.
+Using multiple headings dramatically improves accuracy over single‑row solves.
+
+---
+**Inputs supported per sample (any missing fields are ignored):**
+
+- `north_m_s`, `east_m_s` (ground velocity N, E)
+- `yaw_deg` (heading from IMU / attitude)
+- `airspeed_m_s` (measured; may be biased)
+- Optional: `roll_deg`, `pitch_deg` (unused in core solve but stored)
+- `timestamp` (used for age and reporting)
+
+We build a rolling buffer (default 30 s) of valid samples and solve:
+
+    Vn_i = (s*A_i + b) * cos(H_i) + Wn
+    Ve_i = (s*A_i + b) * sin(H_i) + We
+
+Unknowns: scale s, bias b, wind components (Wn, We).
+At least 3 samples with ≥40° heading spread recommended; more is better.
+When insufficient data, we fall back to single‑row vector using *current*
+(uncorrected) airspeed.
+
+---
+Quick Start (auto-start logger, print live wind):
+
+    python wind_calculator.py --auto --print
+
+Allow calculated airspeed (if Pitot missing):
+
+    python wind_calculator.py --auto --allow-calculated --print
+
+Process a CSV offline:
+
+    python wind_calculator.py --csv-in path/to/drone_log.csv --print
+
+Write wind results to CSV:
+
+    python wind_calculator.py --csv-out wind_logs/wind.csv --print
+
+---
+"""
+
+import argparse
+import asyncio
+import csv
+import json
+import logging
+import math
+import os
+import sys
+import time
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Tuple, Deque
+from collections import deque
+import datetime
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+log = logging.getLogger("wind_calc")
+_handler = logging.StreamHandler()
+_handler.setFormatter(logging.Formatter('[%(asctime)s] %(levelname)s: %(message)s'))
+log.addHandler(_handler)
+log.setLevel(logging.INFO)
+
+# ---------------------------------------------------------------------------
+# Defaults
+# ---------------------------------------------------------------------------
+DEF_HOST = "127.0.0.1"
+DEF_PORT = 9000
+DEF_TICK = 1.0              # s output cadence
+DEF_MIN_AS = 3.0            # m/s min airspeed for valid sample
+DEF_MIN_GS = 1.0            # m/s min groundspeed for valid sample
+DEF_MAX_AGE = 3.0           # s any field age allowed
+DEF_BUF_SEC = 30.0          # s sample buffer for LS bias solve
+DEF_REQ_SPREAD = 40.0       # deg min heading spread for LS solve
+
+# ---------------------------------------------------------------------------
+# Sample container
+# ---------------------------------------------------------------------------
+@dataclass
+class Sample:
+    t: float            # recv time (epoch)
+    src_iso: str        # telemetry timestamp string
+    src_t: float        # telemetry timestamp epoch
+    vn: float           # ground N
+    ve: float           # ground E
+    heading: float      # deg
+    airspeed: float     # m/s (measured)
+
+# ---------------------------------------------------------------------------
+# Utility
+# ---------------------------------------------------------------------------
+
+def _isfinite(x: Any) -> bool:
+    try:
+        return math.isfinite(float(x))
+    except Exception:
+        return False
+
+
+def _f(pkt: Dict[str, Any], key: str) -> Optional[float]:
+    v = pkt.get(key)
+    if v in (None, "", "nan", "NaN"): return None
+    try:
+        f = float(v)
+        if math.isnan(f) or math.isinf(f):
+            return None
+        return f
+    except Exception:
+        return None
+
+
+def _parse_ts(ts: str) -> float:
+    if not ts: return 0.0
+    try:
+        dt = datetime.datetime.fromisoformat(ts.replace('Z','+00:00'))
+        return dt.timestamp()
+    except Exception:
+        return 0.0
+
+
+def _heading_spread(headings: List[float]) -> float:
+    if len(headings) < 2: return 0.0
+    xs = [math.cos(math.radians(h)) for h in headings]
+    ys = [math.sin(math.radians(h)) for h in headings]
+    mx = sum(xs)/len(xs); my = sum(ys)/len(ys)
+    R = math.hypot(mx,my)
+    return (1-R)*180.0
+
+
+def _deg_to_card(d: float) -> str:
+    d = d % 360
+    dirs = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW','N']
+    idx = int((d+11.25)//22.5)
+    return dirs[idx]
+
+# ---------------------------------------------------------------------------
+# Least squares solve for (scale, bias, Wn, We)
+# ---------------------------------------------------------------------------
+
+def solve_scale_bias_wind(samples: List[Sample]) -> Optional[Tuple[float,float,float,float,float]]:
+    """Return (scale, bias, Wn, We, rms) or None if solve fails."""
+    import numpy as np
+    if len(samples) < 3:
+        return None
+    rows = []
+    obs = []
+    for s in samples:
+        A = s.airspeed
+        c = math.cos(math.radians(s.heading))
+        sn = math.sin(math.radians(s.heading))
+        # north equation: vn = (scale*A + bias)*c + Wn
+        rows.append([A*c, c, 1.0, 0.0])
+        obs.append(s.vn)
+        # east equation: ve = (scale*A + bias)*s + We
+        rows.append([A*sn, sn, 0.0, 1.0])
+        obs.append(s.ve)
+    M = np.asarray(rows, dtype=float)
+    y = np.asarray(obs, dtype=float)
+    try:
+        x, residuals, rank, sv = np.linalg.lstsq(M, y, rcond=None)
+        scl, b, Wn, We = x
+        if residuals.size:
+            rms = math.sqrt(residuals[0]/len(obs))
+        else:
+            rms = math.sqrt(((M@x - y)**2).mean())
+        return float(scl), float(b), float(Wn), float(We), float(rms)
+    except Exception as e:
+        log.debug(f"LS solve failed: {e}")
+        return None
+
+# ---------------------------------------------------------------------------
+# WindEngine
+# ---------------------------------------------------------------------------
+class WindEngine:
+    def __init__(self, buf_sec: float = DEF_BUF_SEC, req_spread: float = DEF_REQ_SPREAD):
+        self.buf_sec = buf_sec
+        self.req_spread = req_spread
+        self.samples: Deque[Sample] = deque()
+        self.scale = 1.0
+        self.bias = 0.0
+        self.last_fit_rms = float('inf')
+        self.last_fit_t = 0.0
+
+    def add(self, sm: Sample):
+        self.samples.append(sm)
+        # prune
+        cut = time.time() - self.buf_sec
+        while self.samples and self.samples[0].t < cut:
+            self.samples.popleft()
+
+    def _recent(self) -> List[Sample]:
+        return list(self.samples)
+
+    def maybe_refit(self):
+        now = time.time()
+        if now - self.last_fit_t < 2.0:  # don't fit too often
+            return
+        sm = self._recent()
+        if len(sm) < 4:
+            return
+        if _heading_spread([s.heading for s in sm]) < self.req_spread:
+            return
+        fit = solve_scale_bias_wind(sm)
+        if not fit: return
+        scl, b, Wn, We, rms = fit
+        # accept if better RMS or first
+        if rms < self.last_fit_rms or self.last_fit_rms == float('inf'):
+            self.scale = scl if scl>0 else self.scale
+            self.bias = b
+            self.last_fit_rms = rms
+            self.last_fit_t = now
+            log.info(f"Airspeed fit: scale={self.scale:.3f} bias={self.bias:.2f} wind_n={Wn:.2f} wind_e={We:.2f} rms={rms:.2f}")
+
+    def estimate_from_latest(self) -> Tuple[Optional[float],Optional[float],str]:
+        """Return (wind_spd, wind_dir, method)."""
+        if not self.samples:
+            return None,None,'none'
+        latest = self.samples[-1]
+        # if we have good fit and heading spread, use best LS wind
+        sm = self._recent()
+        if len(sm) >= 4 and _heading_spread([s.heading for s in sm]) >= self.req_spread:
+            fit = solve_scale_bias_wind(sm)
+            if fit:
+                scl,b,Wn,We,rms = fit
+                spd = math.hypot(Wn,We)
+                deg = (math.degrees(math.atan2(We,Wn))+180)%360
+                return spd,deg,'triangulation'
+        # fallback: single row bias‑corrected vector
+        a = self.scale*latest.airspeed + self.bias
+        spd,deg = _vector_wind(latest.vn, latest.ve, latest.heading, a)
+        return spd,deg,'vector'
+
+# ---------------------------------------------------------------------------
+# Vector wind helper
+# ---------------------------------------------------------------------------
+
+def _vector_wind(vn: float, ve: float, heading_deg: float, airspeed: float) -> Tuple[float,float]:
+    hd = math.radians(heading_deg % 360.0)
+    an = airspeed*math.cos(hd)
+    ae = airspeed*math.sin(hd)
+    wn = vn - an
+    we = ve - ae
+    spd = math.hypot(wn,we)
+    deg = (math.degrees(math.atan2(we,wn))+180)%360
+    return spd,deg
+
+# ---------------------------------------------------------------------------
+# CSV writer
+# ---------------------------------------------------------------------------
+class WindCSV:
+    FIELDS=["calc_time_iso","src_time_iso","age_s","method","wind_speed_m_s","wind_speed_kt","wind_dir_deg","wind_dir_card","ground_speed_m_s","airspeed_m_s","scale","bias"]
+    def __init__(self,path:str):
+        self.path=path
+        if path:
+            os.makedirs(os.path.dirname(path),exist_ok=True)
+            self.fh=open(path,'a',newline='',encoding='utf-8')
+            self.wr=csv.DictWriter(self.fh,fieldnames=self.FIELDS)
+            if self.fh.tell()==0:self.wr.writeheader()
+        else:
+            self.fh=None
+            self.wr=None
+    def write(self,calc_t:float,src_iso:str,src_t:float,method:str,wind_spd:Optional[float],wind_dir:Optional[float],gs:Optional[float],as_mps:Optional[float],scale:float,bias:float):
+        if not self.wr:return
+        calc_iso=datetime.datetime.fromtimestamp(calc_t,datetime.UTC).isoformat(timespec='milliseconds')
+        age="" if src_t<=0 else f"{calc_t-src_t:.3f}"
+        row={
+            'calc_time_iso':calc_iso,
+            'src_time_iso':src_iso,
+            'age_s':age,
+            'method':method,
+            'wind_speed_m_s':'' if wind_spd is None else f"{wind_spd:.3f}",
+            'wind_speed_kt':'' if wind_spd is None else f"{(wind_spd*1.94384):.3f}",
+            'wind_dir_deg':'' if wind_dir is None else f"{wind_dir:.1f}",
+            'wind_dir_card':'' if wind_dir is None else _deg_to_card(wind_dir),
+            'ground_speed_m_s':'' if gs is None else f"{gs:.3f}",
+            'airspeed_m_s':'' if as_mps is None else f"{as_mps:.3f}",
+            'scale':f"{scale:.4f}",
+            'bias':f"{bias:.3f}",
+        }
+        self.wr.writerow(row);self.fh.flush()
+    def close(self):
+        if self.fh:
+            try:self.fh.close()
+            except Exception:pass
+
+# ---------------------------------------------------------------------------
+# Packet → sample validation
+# ---------------------------------------------------------------------------
+
+def pkt_to_sample(pkt:Dict[str,Any],*,min_as:float,min_gs:float,allow_calc:bool)->Optional[Sample]:
+    vn=_f(pkt,'north_m_s'); ve=_f(pkt,'east_m_s'); hd=_f(pkt,'yaw_deg'); as_mps=_f(pkt,'airspeed_m_s')
+    if vn is None or ve is None or hd is None or as_mps is None:
+        return None
+    # allow_calc ignored here: we just accept numeric; caller decides policy if needed
+    gs=math.hypot(vn,ve)
+    if gs<min_gs or as_mps<min_as:
+        return None
+    ts=pkt.get('timestamp',''); src_t=_parse_ts(ts); now=time.time()
+    return Sample(t=now,src_iso=ts,src_t=src_t,vn=vn,ve=ve,heading=hd,airspeed=as_mps)
+
+# ---------------------------------------------------------------------------
+# Live TCP reader (newline JSON) from mavsdk_logger.py
+# ---------------------------------------------------------------------------
+async def tcp_reader(host:str,port:int,queue:asyncio.Queue,stale_timeout:float=5.0):
+    while True:
+        try:
+            reader,writer=await asyncio.open_connection(host,port)
+            log.info(f"Connected to telemetry {host}:{port}")
+            while True:
+                try:
+                    line=await asyncio.wait_for(reader.readline(),timeout=stale_timeout)
+                except asyncio.TimeoutError:
+                    log.warning("Telemetry stale; reconnecting...");break
+                if not line:log.warning("Telemetry closed by server.");break
+                line=line.decode(errors='ignore').strip()
+                if not line:continue
+                try:pkt=json.loads(line)
+                except json.JSONDecodeError:continue
+                await queue.put(pkt)
+        except Exception as e:
+            log.error(f"TCP connect error: {e}; retrying in 2s...")
+            await asyncio.sleep(2)
+            continue
+
+# ---------------------------------------------------------------------------
+# CSV input reader (offline / playback)
+# ---------------------------------------------------------------------------
+async def csv_reader(path:str,queue:asyncio.Queue,rate_hz:float=20.0):
+    interval=1.0/max(rate_hz,1.0)
+    with open(path,'r',encoding='utf-8') as f:
+        rdr=csv.DictReader(f)
+        for row in rdr:
+            await queue.put(row)
+            await asyncio.sleep(interval)
+
+# ---------------------------------------------------------------------------
+# Auto-start mavsdk_logger.py (simple)
+# ---------------------------------------------------------------------------
+async def autostart_logger(path:str,log_to:str='csv,tcp'):
+    cmd=[sys.executable,path,'--log-to',log_to]
+    log.info('Auto-starting mavsdk_logger: %s',' '.join(cmd))
+    try:
+        proc=await asyncio.create_subprocess_exec(*cmd)
+        return proc
+    except Exception as e:
+        log.error(f"Failed to launch mavsdk_logger: {e}")
+        return None
+
+# ---------------------------------------------------------------------------
+# Main runner
+# ---------------------------------------------------------------------------
+async def run(args):
+    q:asyncio.Queue=asyncio.Queue()
+    # start input source
+    logger_proc=None
+    if args.csv_in:
+        log.info(f"Reading telemetry from CSV: {args.csv_in}")
+        asyncio.create_task(csv_reader(args.csv_in,q))
+    else:
+        if args.auto:
+            logger_proc=await autostart_logger(args.logger_path,args.logger_args)
+            await asyncio.sleep(2)  # let logger start port
+        asyncio.create_task(tcp_reader(args.host,args.port,q,stale_timeout=args.stale_timeout))
+
+    engine=WindEngine(buf_sec=args.buf_sec,req_spread=args.req_spread)
+    out=WindCSV(args.csv_out) if args.csv_out else WindCSV('')
+
+    last_print=0.0
+    while True:
+        try:
+            pkt=await asyncio.wait_for(q.get(),timeout=args.tick)
+        except asyncio.TimeoutError:
+            # tick even if no new packet
+            pkt=None
+        now=time.time()
+        if pkt:
+            sm=pkt_to_sample(pkt,min_as=args.min_airspeed,min_gs=args.min_groundspeed,allow_calc=args.allow_calculated)
+            if sm:engine.add(sm)
+        # periodic estimate
+        if now-last_print>=args.tick:
+            last_print=now
+            engine.maybe_refit()
+            spd,deg,method=engine.estimate_from_latest()
+            gs=as_mps=None
+            src_iso=''; src_t=0.0
+            if engine.samples:
+                latest=engine.samples[-1]
+                gs=math.hypot(latest.vn,latest.ve)
+                as_mps=latest.airspeed
+                src_iso=latest.src_iso; src_t=latest.src_t
+            out.write(now,src_iso,src_t,method,spd,deg,gs,as_mps,engine.scale,engine.bias)
+            if args.print:
+                if spd is not None:
+                    log.info(f"Wind: {spd:5.2f} m/s ({spd*1.94384:4.1f} kt) Dir:{deg:6.1f}° ({_deg_to_card(deg)}) GS:{(gs or 0):5.2f} AS:{(as_mps or 0):5.2f} [meth:{method} scl:{engine.scale:.3f} b:{engine.bias:.2f}]")
+                else:
+                    log.info("Wind: --- no valid samples yet ---")
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+def parse_args()->argparse.Namespace:
+    p=argparse.ArgumentParser(description='Precision Wind Estimator from MAVSDK telemetry or CSV')
+    p.add_argument('--host',default=DEF_HOST)
+    p.add_argument('--port',type=int,default=DEF_PORT)
+    p.add_argument('--tick',type=float,default=DEF_TICK,help='Output period seconds')
+    p.add_argument('--min-airspeed',type=float,default=DEF_MIN_AS)
+    p.add_argument('--min-groundspeed',type=float,default=DEF_MIN_GS)
+    p.add_argument('--max-req-age',dest='max_data_age',type=float,default=DEF_MAX_AGE,help='(unused placeholder)')
+    p.add_argument('--buf-sec',type=float,default=DEF_BUF_SEC,help='Seconds of history for LS fit')
+    p.add_argument('--req-spread',type=float,default=DEF_REQ_SPREAD,help='Min heading spread deg for LS fit')
+    p.add_argument('--stale-timeout',type=float,default=5.0)
+    p.add_argument('--allow-calculated',action='store_true')
+    p.add_argument('--auto',action='store_true',help='Auto-start mavsdk_logger.py')
+    p.add_argument('--logger-path',type=str,default='mavsdk_logger.py')
+    p.add_argument('--logger-args',type=str,default='csv,tcp')
+    p.add_argument('--csv-in',type=str,default='',help='Read telemetry from CSV instead of TCP')
+    p.add_argument('--csv-out',type=str,default='',help='Write wind to CSV path')
+    p.add_argument('--print',action='store_true')
+    p.add_argument('--log-file',type=str,default='')
+    a=p.parse_args()
+    if a.log_file:
+        fh=logging.FileHandler(a.log_file)
+        fh.setFormatter(logging.Formatter('[%(asctime)s] %(levelname)s: %(message)s'))
+        log.addHandler(fh)
+    return a
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+if __name__=='__main__':
+    args=parse_args()
+    try:
+        asyncio.run(run(args))
+    except KeyboardInterrupt:
+        log.info('Stopped by user.')
+        sys.exit(0)
+    except Exception as e:
+        log.error(f'Fatal error: {e}')
+        sys.exit(1)

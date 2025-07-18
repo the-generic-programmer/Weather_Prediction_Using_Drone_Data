@@ -1,0 +1,1 @@
+timestamp,latitude,longitude,altitude_m,wind_speed_ms,wind_speed_kmh,wind_speed_knots,wind_direction_deg,wind_direction_cardinal,ground_speed_ms,ground_direction_deg,airspeed_ms,air_direction_deg,confidence
