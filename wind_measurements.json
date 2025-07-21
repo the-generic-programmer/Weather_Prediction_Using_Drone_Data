@@ -1426,5 +1426,150 @@
     "sample_count": 100,
     "u_component_ms": 1.4306904399042881,
     "v_component_ms": -1.885229132443572
+  },
+  {
+    "timestamp": "2025-07-21T09:12:22.365676+00:00",
+    "speed_knots": 4.600360925591192,
+    "direction_degrees": 322.8053292062771
+  },
+  {
+    "timestamp": "2025-07-21T09:13:21.595516+00:00",
+    "speed_knots": 4.600360925591192,
+    "direction_degrees": 322.8053292062771
+  },
+  {
+    "timestamp": "2025-07-21T15:48:26Z",
+    "speed_knots": 12.453166495121856,
+    "direction_degrees": 7.134862997895311
+  },
+  {
+    "timestamp": "2025-07-21T15:49:27Z",
+    "speed_knots": 12.473990612464574,
+    "direction_degrees": 7.125175708372012
+  },
+  {
+    "timestamp": "2025-07-21T15:50:27Z",
+    "speed_knots": 12.494814729807288,
+    "direction_degrees": 8.22023196666629
+  },
+  {
+    "timestamp": "2025-07-21T15:51:27Z",
+    "speed_knots": 12.494814729807288,
+    "direction_degrees": 8.57648711868967
+  },
+  {
+    "timestamp": "2025-07-21T16:10:20Z",
+    "speed_knots": 14.276015141072552,
+    "direction_degrees": 343.60708056849734
+  },
+  {
+    "timestamp": "2025-07-21T16:11:15Z",
+    "speed_knots": 14.311095880986509,
+    "direction_degrees": 343.53917712190093
+  },
+  {
+    "timestamp": "2025-07-21T16:12:15Z",
+    "speed_knots": 14.276015141072552,
+    "direction_degrees": 3.6810626285953276
+  },
+  {
+    "timestamp": "2025-07-21T16:13:16Z",
+    "speed_knots": 11.981559665079624,
+    "direction_degrees": 15.840981065822575
+  },
+  {
+    "timestamp": "2025-07-21T16:14:16Z",
+    "speed_knots": 9.782279919053762,
+    "direction_degrees": 23.667092604329184
+  },
+  {
+    "timestamp": "2025-07-21T16:15:16Z",
+    "speed_knots": 9.774407521528317,
+    "direction_degrees": 29.225029333243697
+  },
+  {
+    "timestamp": "2025-07-21T16:16:16Z",
+    "speed_knots": 9.782279919053762,
+    "direction_degrees": 33.33855496036233
+  },
+  {
+    "timestamp": "2025-07-21T16:17:17Z",
+    "speed_knots": 9.774407521528317,
+    "direction_degrees": 36.60095846606953
+  },
+  {
+    "timestamp": "2025-07-21T16:18:17Z",
+    "speed_knots": 9.782279919053762,
+    "direction_degrees": 39.275242620656854
+  },
+  {
+    "timestamp": "2025-07-21T16:19:17Z",
+    "speed_knots": 9.850015512111232,
+    "direction_degrees": 41.73645074611596
+  },
+  {
+    "timestamp": "2025-07-21T16:20:27Z",
+    "speed_knots": 9.917751105168703,
+    "direction_degrees": 43.77551572894686
+  },
+  {
+    "timestamp": "2025-07-21T16:21:18Z",
+    "speed_knots": 9.978250226612985,
+    "direction_degrees": 45.60414129475299
+  },
+  {
+    "timestamp": "2025-07-21T16:22:18Z",
+    "speed_knots": 10.038749348057266,
+    "direction_degrees": 47.246203368910244
+  },
+  {
+    "timestamp": "2025-07-21T16:23:18Z",
+    "speed_knots": 10.122980420141179,
+    "direction_degrees": 48.758142383955885
+  },
+  {
+    "timestamp": "2025-07-21T16:24:18Z",
+    "speed_knots": 10.207211492225092,
+    "direction_degrees": 50.17105462933307
+  },
+  {
+    "timestamp": "2025-07-21T16:25:18Z",
+    "speed_knots": 10.300346420086942,
+    "direction_degrees": 51.4962464843818
+  },
+  {
+    "timestamp": "2025-07-21T16:26:19Z",
+    "speed_knots": 10.132949858106052,
+    "direction_degrees": 62.37109623515937
+  },
+  {
+    "timestamp": "2025-07-21T16:27:20Z",
+    "speed_knots": 16.687629686810926,
+    "direction_degrees": 42.33323975615508
+  },
+  {
+    "timestamp": "2025-07-21T16:28:20Z",
+    "speed_knots": 23.242309515515796,
+    "direction_degrees": 35.34781879855734
+  },
+  {
+    "timestamp": "2025-07-21T16:29:20Z",
+    "speed_knots": 23.591349379394902,
+    "direction_degrees": 32.05905288269071
+  },
+  {
+    "timestamp": "2025-07-21T16:30:20Z",
+    "speed_knots": 23.70400594473001,
+    "direction_degrees": 30.324385085296967
+  },
+  {
+    "timestamp": "2025-07-21T16:31:21Z",
+    "speed_knots": 23.816662510065118,
+    "direction_degrees": 29.081346717146232
+  },
+  {
+    "timestamp": "2025-07-21T16:32:16Z",
+    "speed_knots": 24.522485861677378,
+    "direction_degrees": 23.94359814248179
   }
 ]
