@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Enhanced Weather Prediction Pipeline (final)
-===========================================
+Enhanced Weather Prediction Pipeline (final with DB status print)
+=================================================================
+
 Major Features
 --------------
 * Uses *processed* wind data written by wind_calculator.py (wind_latest.json).
@@ -9,8 +10,9 @@ Major Features
 * Blends model with live Open-Meteo API for stability + sanity.
 * Shows sunrise/sunset for drone & user locations (if astral available).
 * Logs to SQLite (weather_predict.db) with extended wind metadata columns.
+* Prints at startup whether SQLite DB was created, reset fresh, or already existed.
 * TCP streaming client for live drone telemetry (JSON lines).
-* One-shot CSV mode (read last valid row).
+* One-shot CSV batch mode (reads last valid row).
 
 Noise Reduction
 ---------------
@@ -19,14 +21,14 @@ Noise Reduction
 * Suppresses pandas FutureWarning for dtype assignment.
 * Minimal, user-focused console output.
 
-CLI
----
+CLI Examples
+------------
     python predict.py --tcp
     python predict.py --tcp --host 127.0.0.1 --port 9000 --period 60
     python predict.py --csv sample.csv
     python predict.py --wind-path /tmp/wind_latest.json --wind-max-age 5
 
-wind_latest.json schema (written by wind_calculator.py pretty_print()):
+`wind_latest.json` schema (written by wind_calculator.py pretty_print()):
     {
       "timestamp": "2025-07-23T12:47:47Z",
       "wind_speed_knots": 11.86,
@@ -98,7 +100,7 @@ except Exception:
     pass
 
 # -----------------------------------------------------------------------------
-# Import WindResult for type hints (optional)
+# Import WindResult for type hints (optional only)
 # -----------------------------------------------------------------------------
 try:
     from wind_calculator import WindResult  # type: ignore
@@ -128,7 +130,7 @@ WIND_HISTORY_PATH = "wind_measurements.json"  # optional rolling log
 
 WIND_MAX_AGE_S = 5.0          # how fresh must wind be to use it
 _WIND_WARN_INTERVAL_S = 10.0  # throttle missing-wind warnings
-_LAST_WIND_WARN_T = 0.0
+_LAST_WIND_WARN_T = 0.0       # updated in get_wind_data()
 
 # Weather sanity / model blending
 MODEL_VALID_TEMP_RANGE = (-40.0, 60.0)
@@ -209,6 +211,7 @@ DB_COLUMNS = {
 }
 
 def initialize_database(reset: bool = False) -> None:
+    """Create DB / table if absent; add any missing cols; safe to call repeatedly."""
     conn = sqlite3.connect(SQLITE_PATH)
     cur = conn.cursor()
     try:
@@ -225,8 +228,9 @@ def initialize_database(reset: bool = False) -> None:
         cur.close()
         conn.close()
 
-def log_prediction_to_db(result: Dict[str, Any]) -> None:
-    """Persist a prediction row; gracefully handles missing keys."""
+def log_prediction_to_db(result: Dict[str, Any]) -> bool:
+    """Persist a prediction row; gracefully handles missing keys. Returns True on success."""
+    success = False
     try:
         conn = sqlite3.connect(SQLITE_PATH)
         cur = conn.cursor()
@@ -236,7 +240,7 @@ def log_prediction_to_db(result: Dict[str, Any]) -> None:
             safe_float(result.get('predicted_temperature')),
             safe_float(result.get('temperature_api (°C)')),
             safe_float(result.get('humidity (% RH)')),
-            safe_float(result.get('wind_speed_knots')),        # stored as m/s? we keep kt numeric; you can convert in SQL
+            safe_float(result.get('wind_speed_knots')),        # stored numeric; interpret as kt in Metabase
             safe_float(result.get('wind_direction_degrees')),
             safe_float(result.get('confidence_range (±°C)')),
             str(result.get('humidity_timestamp', '')),
@@ -271,6 +275,7 @@ def log_prediction_to_db(result: Dict[str, Any]) -> None:
             vals,
         )
         conn.commit()
+        success = True
     except Exception as e:
         logging.error(f"SQLite Database Error: {e}")
     finally:
@@ -279,6 +284,7 @@ def log_prediction_to_db(result: Dict[str, Any]) -> None:
             conn.close()
         except Exception:
             pass
+    return success
 
 # -----------------------------------------------------------------------------
 # External weather helpers
@@ -781,7 +787,8 @@ def run_tcp_client(host: str = TCP_HOST_DEFAULT, port: int = TCP_PORT_DEFAULT,
                                 result = process_live_prediction(drone_data, predictor=predictor)
                                 if "error" not in result:
                                     print(json.dumps(result, indent=2, ensure_ascii=False))
-                                    log_prediction_to_db(result)
+                                    if log_prediction_to_db(result):
+                                        logging.debug("DB row inserted.")
                                     last_pred_time = now
                                 else:
                                     logging.error(result["error"])
@@ -855,8 +862,21 @@ if __name__ == "__main__":
     if args.wind_max_age != WIND_MAX_AGE_S:
         WIND_MAX_AGE_S = args.wind_max_age  # type: ignore[assignment]
 
+    # --- DB status print ---
+    pre_exists = os.path.exists(SQLITE_PATH)
+    initialize_database(reset=args.reset_db)
+    if args.reset_db:
+        logging.info(f"SQLite DB reset & recreated: {SQLITE_PATH}")
+        print(f"[DB] reset & recreated: {SQLITE_PATH}")
+    else:
+        if pre_exists:
+            logging.info(f"SQLite DB exists: {SQLITE_PATH}")
+            print(f"[DB] using existing: {SQLITE_PATH}")
+        else:
+            logging.info(f"SQLite DB created: {SQLITE_PATH}")
+            print(f"[DB] created new: {SQLITE_PATH}")
+
     try:
-        initialize_database(reset=args.reset_db)
         if args.tcp:
             run_tcp_client(host=args.host, port=args.port, period=args.period)
         elif args.csv:
