@@ -317,6 +317,19 @@ class EnhancedWindCalculator:
 # -----------------------------------------------------------------------------
 
 def pretty_print(res: WindResult, reject_counts: Optional[Dict[str,int]] = None):
+    # --- Export latest wind result for predict.py ---
+    import json
+    try:
+        WIND_SHARED_PATH = "wind_latest.json"
+        with open(WIND_SHARED_PATH, "w") as wf:
+            json.dump({
+                "timestamp": res.timestamp,
+                "wind_speed_knots": round(res.wind_speed_knots, 2),
+                "wind_direction_degrees": round(res.wind_direction, 2)
+            }, wf)
+    except Exception as e:
+        logging.warning(f"Failed to write wind_latest.json: {e}")
+
     current_time = time.strftime("%H:%M:%S")
 
     speed_acc = ("EXCELLENT" if res.std_dev_speed < 0.05 else
