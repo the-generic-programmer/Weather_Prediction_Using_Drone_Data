@@ -1,42 +1,70 @@
 #!/usr/bin/env python3
 """
-Enhanced Weather Prediction Pipeline (Wind Fetched from wind_calculator.py)
-===========================================================================
+Enhanced Weather Prediction Pipeline (final)
+===========================================
+Major Features
+--------------
+* Uses *processed* wind data written by wind_calculator.py (wind_latest.json).
+* Predicts near-surface ambient temperature from drone telemetry + ML model.
+* Blends model with live Open-Meteo API for stability + sanity.
+* Shows sunrise/sunset for drone & user locations (if astral available).
+* Logs to SQLite (weather_predict.db) with extended wind metadata columns.
+* TCP streaming client for live drone telemetry (JSON lines).
+* One-shot CSV mode (read last valid row).
 
-- Reads *latest processed* wind (speed + direction) written by wind_calculator.py.
-- Predicts near-surface ambient temperature using ML model + API blending.
-- Works with live telemetry streamed from `MAVSDK_logger.py` over TCP (JSON lines).
-- Falls back gracefully (0 kt) if no recent wind is available; warns user.
-- Logs predictions to SQLite DB; supports one‑shot CSV mode.
+Noise Reduction
+---------------
+* Suppresses sklearn InconsistentVersionWarning.
+* Suppresses urllib3 InsecureRequestWarning (TLS).
+* Suppresses pandas FutureWarning for dtype assignment.
+* Minimal, user-focused console output.
 
-IMPORTANT: wind_calculator.py must regularly write a JSON file (see WIND_SHARED_PATH)
-with at least: {"timestamp": "...", "wind_speed_knots": <float>, "wind_direction_degrees": <float>}
+CLI
+---
+    python predict.py --tcp
+    python predict.py --tcp --host 127.0.0.1 --port 9000 --period 60
+    python predict.py --csv sample.csv
+    python predict.py --wind-path /tmp/wind_latest.json --wind-max-age 5
+
+wind_latest.json schema (written by wind_calculator.py pretty_print()):
+    {
+      "timestamp": "2025-07-23T12:47:47Z",
+      "wind_speed_knots": 11.86,
+      "wind_direction_degrees": 11.5
+    }
+
+If stale (> WIND_MAX_AGE_S) or missing, we fall back to 0 kt and warn periodically.
+
 """
 
+# -----------------------------------------------------------------------------
+# Standard libs
+# -----------------------------------------------------------------------------
 import os
 import sys
 import csv
 import json
 import time
+import math
 import socket
 import logging
 import sqlite3
-import math
+import warnings
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any, Tuple
 
+# -----------------------------------------------------------------------------
+# Third-party
+# -----------------------------------------------------------------------------
 import numpy as np
 import pandas as pd
 import requests
 
-# ---------------------------------------------------------------------------
-# Optional/3rd-party imports with graceful degradation
-# ---------------------------------------------------------------------------
+# Optional libs (graceful degradation)
 try:
     import joblib
-except ImportError:
+except ImportError:  # we'll error when we actually try to load model
     joblib = None
-    logging.warning("joblib not found. Install in venv: pip install joblib")
 
 try:
     from astral import LocationInfo
@@ -44,53 +72,65 @@ try:
 except ImportError:
     LocationInfo = None
     sun = None
-    logging.warning("astral not installed; sunrise/sunset disabled")
 
 try:
     from timezonefinder import TimezoneFinder
 except ImportError:
     TimezoneFinder = None
-    logging.warning("timezonefinder not installed; falling back to defaults")
 
 try:
     from geopy.geocoders import Nominatim
 except ImportError:
     Nominatim = None
-    logging.warning("geopy not installed; location names will be lat/lon")
 
-import pytz
+import pytz  # usually available; if not, fallbacks below
 
-# ---------------------------------------------------------------------------
-# Wind Calculator types (for type hints only; we do NOT recompute wind here)
-# ---------------------------------------------------------------------------
-# We import WindResult dataclass for convenience; we don't instantiate EnhancedWindCalculator.
+# -----------------------------------------------------------------------------
+# Warning suppression
+# -----------------------------------------------------------------------------
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", message="Trying to unpickle estimator")
+warnings.filterwarnings("ignore", message="incompatible dtype")  # pandas FutureWarning pattern
+try:
+    from urllib3.exceptions import InsecureRequestWarning
+    warnings.simplefilter('ignore', InsecureRequestWarning)
+except Exception:
+    pass
+
+# -----------------------------------------------------------------------------
+# Import WindResult for type hints (optional)
+# -----------------------------------------------------------------------------
 try:
     from wind_calculator import WindResult  # type: ignore
 except Exception:
-    WindResult = None  # fallback; not required to run
+    WindResult = None
 
-# ---------------------------------------------------------------------------
-# Configurations
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Configuration
+# -----------------------------------------------------------------------------
 MODEL_DIR = "models"
-EXPECTED_COORDS = (13.0, 77.625)  # User: Bengaluru
-DRONE_COORDS = (27.6889981, 86.726715)  # Lukla fallback
+MODEL_FILE = "weather_model.joblib"
+SCALER_FILE = "scaler.joblib"
+
+EXPECTED_COORDS = (13.0, 77.625)  # user home (Bengaluru)
+DRONE_COORDS = (27.6889981, 86.726715)  # fallback (Lukla)
+
 TCP_HOST_DEFAULT = "127.0.0.1"
 TCP_PORT_DEFAULT = 9000
 TCP_RETRY_DELAY = 5
-PREDICTION_INTERVAL = 60  # seconds; CLI overridable
+PREDICTION_INTERVAL = 60  # s
+
 SQLITE_PATH = "weather_predict.db"
 
-# Shared wind file produced by wind_calculator.py (update path if needed)
-WIND_SHARED_PATH = "wind_latest.json"        # single most recent measurement
-WIND_HISTORY_PATH = "wind_measurements.json" # optional rolling log (ignored here)
+# Wind shared file(s) written by wind_calculator.py
+WIND_SHARED_PATH = "wind_latest.json"         # single current
+WIND_HISTORY_PATH = "wind_measurements.json"  # optional rolling log
 
-# How fresh must wind be?
-WIND_MAX_AGE_S = 5.0  # seconds
-_WIND_WARN_INTERVAL_S = 10.0  # throttle warnings about missing wind
+WIND_MAX_AGE_S = 5.0          # how fresh must wind be to use it
+_WIND_WARN_INTERVAL_S = 10.0  # throttle missing-wind warnings
 _LAST_WIND_WARN_T = 0.0
 
-# Sanity / blending thresholds
+# Weather sanity / model blending
 MODEL_VALID_TEMP_RANGE = (-40.0, 60.0)
 MODEL_VALID_PRESS_RANGE = (870.0, 1050.0)
 MODEL_VALID_RH_RANGE = (0.0, 100.0)
@@ -107,7 +147,7 @@ def _is_nullish(val: Any) -> bool:
     if isinstance(val, str) and val.strip().lower() in ("", "nan", "none", "null", "na"):
         return True
     try:
-        if np.isnan(val):
+        if np.isnan(val):  # type: ignore[arg-type]
             return True
     except Exception:
         pass
@@ -186,7 +226,7 @@ def initialize_database(reset: bool = False) -> None:
         conn.close()
 
 def log_prediction_to_db(result: Dict[str, Any]) -> None:
-    """Persist prediction row; missing wind meta fields are filled with 0/None."""
+    """Persist a prediction row; gracefully handles missing keys."""
     try:
         conn = sqlite3.connect(SQLITE_PATH)
         cur = conn.cursor()
@@ -196,8 +236,8 @@ def log_prediction_to_db(result: Dict[str, Any]) -> None:
             safe_float(result.get('predicted_temperature')),
             safe_float(result.get('temperature_api (°C)')),
             safe_float(result.get('humidity (% RH)')),
-            safe_float(result.get('wind_speed_knots')),        # stored as 'wind_speed' in DB
-            safe_float(result.get('wind_direction_degrees')),  # stored as 'wind_direction' in DB
+            safe_float(result.get('wind_speed_knots')),        # stored as m/s? we keep kt numeric; you can convert in SQL
+            safe_float(result.get('wind_direction_degrees')),
             safe_float(result.get('confidence_range (±°C)')),
             str(result.get('humidity_timestamp', '')),
             str(result.get('sunrise_at_drone_location', '')),
@@ -243,15 +283,26 @@ def log_prediction_to_db(result: Dict[str, Any]) -> None:
 # -----------------------------------------------------------------------------
 # External weather helpers
 # -----------------------------------------------------------------------------
+def _om_get_json(url: str, timeout: int = 10) -> Optional[Dict[str, Any]]:
+    try:
+        resp = requests.get(url, timeout=timeout, verify=False)
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        logging.error(f"HTTP error fetching weather: {e}")
+        return None
+
 def get_weather_data(lat: float, lon: float) -> Tuple[float, float, float, str, str]:
+    """
+    Returns (temp_api, rh, cloud_cover, timestamp, source_url).
+    Safe fallbacks used on error.
+    """
     url = (
         "https://api.open-meteo.com/v1/forecast?"
         f"latitude={lat}&longitude={lon}&current=temperature_2m,relative_humidity_2m,cloudcover"
     )
-    try:
-        resp = requests.get(url, timeout=10, verify=False)
-        resp.raise_for_status()
-        data = resp.json()
+    data = _om_get_json(url)
+    if data:
         cur = data.get("current", {})
         return (
             cur.get("temperature_2m", 15.0),
@@ -260,9 +311,7 @@ def get_weather_data(lat: float, lon: float) -> Tuple[float, float, float, str, 
             cur.get("time", datetime.now(timezone.utc).isoformat()),
             url,
         )
-    except Exception as e:
-        logging.error(f"HTTP error fetching weather: {e}")
-        return 15.0, 80.0, 50.0, datetime.now(timezone.utc).isoformat(), "API_ERROR"
+    return 15.0, 80.0, 50.0, datetime.now(timezone.utc).isoformat(), url
 
 def get_rain_chance_in_2_hours(lat: float, lon: float) -> float:
     now = datetime.now(timezone.utc)
@@ -272,20 +321,16 @@ def get_rain_chance_in_2_hours(lat: float, lon: float) -> float:
         "https://api.open-meteo.com/v1/forecast?"
         f"latitude={lat}&longitude={lon}&hourly=precipitation_probability&start_date={date_str}&end_date={date_str}&timezone=UTC"
     )
-    try:
-        resp = requests.get(url, timeout=10, verify=False)
-        resp.raise_for_status()
-        data = resp.json().get("hourly", {})
-        times = data.get("time", [])
-        probs = data.get("precipitation_probability", [])
+    data = _om_get_json(url)
+    if data:
+        hourly = data.get("hourly", {})
+        times = hourly.get("time", [])
+        probs = hourly.get("precipitation_probability", [])
         target = future.strftime("%Y-%m-%dT%H:00")
         for t, p in zip(times, probs):
             if t >= target:
                 return float(p if p is not None else 50)
-        return 50.0
-    except Exception as e:
-        logging.error(f"HTTP error fetching rain chance: {e}")
-        return 50.0
+    return 50.0
 
 def get_forecast_2h(lat: float, lon: float) -> Dict[str, float]:
     now = datetime.now(timezone.utc)
@@ -298,14 +343,13 @@ def get_forecast_2h(lat: float, lon: float) -> Dict[str, float]:
         "&hourly=temperature_2m,cloudcover,precipitation_probability"
         f"&start_date={date_str}&end_date={date_str}&timezone=UTC"
     )
-    try:
-        resp = requests.get(url, timeout=10)
-        resp.raise_for_status()
-        data = resp.json().get("hourly", {})
-        times = data.get("time", [])
-        temps = data.get("temperature_2m", [])
-        clouds = data.get("cloudcover", [])
-        rains = data.get("precipitation_probability", [])
+    data = _om_get_json(url)
+    if data:
+        hourly = data.get("hourly", {})
+        times = hourly.get("time", [])
+        temps = hourly.get("temperature_2m", [])
+        clouds = hourly.get("cloudcover", [])
+        rains = hourly.get("precipitation_probability", [])
         target = future.strftime("%Y-%m-%dT") + hour_str
         for i, t in enumerate(times):
             if t >= target:
@@ -320,8 +364,6 @@ def get_forecast_2h(lat: float, lon: float) -> Dict[str, float]:
                 "forecast_cloud_cover_2h": float(clouds[-1]),
                 "forecast_rain_chance_2h": float(rains[-1]),
             }
-    except Exception as e:
-        logging.error(f"Forecast API error: {e}")
     return {
         "forecast_temp_2h": None,
         "forecast_cloud_cover_2h": None,
@@ -362,7 +404,7 @@ def get_timezone(lat: float, lon: float) -> str:
 
 def get_location_name(lat: float, lon: float) -> str:
     if geolocator is None:
-        return f"Lat: {lat:.3f}, Lon: {lon:.3f}"
+        return f"Unknown, India"  # safe fallback given your usage
     try:
         loc = geolocator.reverse((lat, lon), language='en', timeout=10)
         if not loc:
@@ -389,16 +431,15 @@ def get_sunrise_sunset(lat: float, lon: float, tz_str: str) -> Dict[str, str]:
         return {"sunrise_readable": "Unknown", "sunset_readable": "Unknown"}
 
 # -----------------------------------------------------------------------------
-# Wind fetch (from wind_calculator.py shared file)
+# Wind fetch (from wind_calculator.py's wind_latest.json)
 # -----------------------------------------------------------------------------
 def _parse_wind_payload(obj: Dict[str, Any]) -> Optional[Tuple[float, float, float]]:
     """
-    Returns (speed_knots, direction_deg, age_s) or None.
-    Accepts several key variants.
+    Return (speed_knots, direction_deg, age_s) if parse ok else None.
+    Accepts several key variants for compatibility.
     """
     if not isinstance(obj, dict):
         return None
-    # Timestamp
     ts_raw = obj.get("timestamp") or obj.get("time") or obj.get("ts")
     age_s = None
     if ts_raw:
@@ -407,7 +448,6 @@ def _parse_wind_payload(obj: Dict[str, Any]) -> Optional[Tuple[float, float, flo
             age_s = (datetime.now(timezone.utc) - ts).total_seconds()
         except Exception:
             age_s = None
-    # Speed
     if "wind_speed_knots" in obj:
         spd_kt = safe_float(obj["wind_speed_knots"], 0.0)
     elif "speed_knots" in obj:
@@ -420,7 +460,6 @@ def _parse_wind_payload(obj: Dict[str, Any]) -> Optional[Tuple[float, float, flo
         spd_kt = safe_float(obj["wind_speed_m_s"], 0.0) * 1.94384
     else:
         spd_kt = 0.0
-    # Direction
     if "wind_direction_degrees" in obj:
         dir_deg = safe_float(obj["wind_direction_degrees"], 0.0)
     elif "direction_degrees" in obj:
@@ -433,8 +472,8 @@ def _parse_wind_payload(obj: Dict[str, Any]) -> Optional[Tuple[float, float, flo
 
 def _get_latest_wind() -> Optional[Tuple[float, float]]:
     """
-    Read the most recent processed wind from WIND_SHARED_PATH.
-    Returns (speed_knots, direction_deg) or None if stale/unavailable.
+    Read most recent wind from WIND_SHARED_PATH.
+    Return (speed_knots, direction_deg) if fresh else None.
     """
     if not os.path.exists(WIND_SHARED_PATH):
         return None
@@ -445,11 +484,7 @@ def _get_latest_wind() -> Optional[Tuple[float, float]]:
         logging.debug(f"wind load failed: {e}")
         return None
 
-    if isinstance(data, list) and data:
-        obj = data[-1]
-    else:
-        obj = data
-
+    obj = data[-1] if isinstance(data, list) and data else data
     parsed = _parse_wind_payload(obj)
     if not parsed:
         return None
@@ -464,9 +499,9 @@ def _get_latest_wind() -> Optional[Tuple[float, float]]:
 class WeatherPredictor:
     def __init__(self, model_dir: str = MODEL_DIR):
         if joblib is None:
-            raise ImportError("joblib missing; install in venv: pip install joblib")
-        model_path = os.path.join(model_dir, 'weather_model.joblib')
-        scaler_path = os.path.join(model_dir, 'scaler.joblib')
+            raise ImportError("joblib missing; pip install joblib")
+        model_path = os.path.join(model_dir, MODEL_FILE)
+        scaler_path = os.path.join(model_dir, SCALER_FILE)
         if not os.path.exists(model_path):
             raise FileNotFoundError(f"Model not found: {model_path}")
         if not os.path.exists(scaler_path):
@@ -479,7 +514,6 @@ class WeatherPredictor:
         ]
         logging.info("WeatherPredictor initialized (wind external).")
 
-    # We keep an interface so caller can ask for wind; we just read the shared file.
     def get_wind_data(self) -> Dict[str, Any]:
         global _LAST_WIND_WARN_T
         latest = _get_latest_wind()
@@ -513,8 +547,8 @@ class WeatherPredictor:
     def prepare_features(self, drone_data: Dict[str, Any], rh: float, cloud_cover: float,
                          wind_speed_ms: float, wind_direction: float, api_temp: float) -> pd.DataFrame:
         now = datetime.now(timezone.utc)
-        altitude = safe_float(drone_data.get('altitude_from_sealevel', 0))
-        base_pressure = safe_float(drone_data.get('pressure_hpa', 1013))
+        altitude = safe_float(drone_data.get('altitude_from_sealevel'), 0.0)
+        base_pressure = safe_float(drone_data.get('pressure_hpa'), 1013.0)
         if altitude > 10:
             adjusted_pressure = base_pressure * (1 - 0.0065 * altitude / 288.15) ** 5.257
         else:
@@ -535,6 +569,7 @@ class WeatherPredictor:
             'humidity_temp_factor': humidity_temp_factor,
             'api_temperature_reference': api_temp,
         }
+        # fill any model-required features that we didn't compute
         for name in self.feature_names:
             if name not in features:
                 if name == 'altitude':
@@ -545,7 +580,10 @@ class WeatherPredictor:
                     features[name] = 0.0
                 else:
                     features[name] = 0.0
-        return pd.DataFrame([features])
+        df = pd.DataFrame([features])
+        # ensure float dtype to avoid FutureWarning in noise injection
+        df = df.astype(float)
+        return df
 
     def predict_raw(self, features: pd.DataFrame) -> float:
         try:
@@ -605,7 +643,7 @@ def process_live_prediction(
     if predictor is None:
         predictor = get_predictor()
 
-    # Validate required fields
+    # Check required fields
     missing = [f for f in ('latitude', 'longitude') if safe(data.get(f)) is None]
     if missing:
         logging.warning(f"Missing required fields: {missing}")
@@ -626,7 +664,7 @@ def process_live_prediction(
     alt = safe_float(data.get('altitude_from_sealevel'), 0.0)
     p_msl = p_station * (1 - 0.0065 * alt / 288.15) ** -5.257 if alt > 10 else p_station
 
-    # Wind data (external)
+    # Wind data
     wd = predictor.get_wind_data()
     wind_speed_ms = wd["wind_speed_ms"]
     wind_speed_knots = wd["wind_speed_knots"]
@@ -641,14 +679,16 @@ def process_live_prediction(
     model_pred = predictor.predict_raw(features)
     fused_temp, ci = fuse_prediction(model_pred, temp_api, rh, p_msl)
 
-    # Monte Carlo-ish confidence refinement
+    # Monte Carlo-ish CI augmentation (float-safe; no dtype warnings)
     try:
+        feats_np = features.to_numpy(dtype=float)
         preds = []
         for _ in range(10):
-            noise = np.random.normal(0, 0.02, size=features.shape[1])  # 2% noise per feature
-            noisy_df = features.copy()
-            noisy_df.iloc[0] = noisy_df.iloc[0] * (1 + noise)
-            preds.append(predictor.predict_raw(noisy_df))
+            noise = np.random.normal(0, 0.02, size=feats_np.shape[1])
+            noisy = feats_np[0] * (1 + noise)
+            noisy_df = pd.DataFrame([noisy], columns=features.columns)
+            pred_n = predictor.predict_raw(noisy_df)
+            preds.append(pred_n)
         preds = [p for p in preds if not math.isnan(p)]
         if len(preds) >= 2:
             sd = float(np.std(preds))
@@ -668,10 +708,10 @@ def process_live_prediction(
     ts_in = safe(data.get("timestamp"))
     ts_out = ts_in if isinstance(ts_in, str) and ts_in else datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
 
-    # Forecast details
+    # Forecast
     forecast = get_forecast_2h(lat, lon)
 
-    # Friendly summary line (your requested format)
+    # Friendly summary (exact style you requested)
     print(
         f"🌬️ Wind {wind_speed_knots:.2f} kt @ {wind_direction_degrees:.1f}° | "
         f"Now {fused_temp:.1f}°C | +2h {forecast['forecast_temp_2h']}°C"
@@ -770,6 +810,7 @@ def predict_from_csv(csv_path: str) -> None:
     if df.empty:
         logging.error("CSV file is empty")
         return
+    # iterate backward for last valid row
     for idx in range(len(df) - 1, -1, -1):
         row = df.iloc[idx]
         data = {}
@@ -808,11 +849,11 @@ if __name__ == "__main__":
                         help='Max age (s) of wind data before falling back to 0 kt')
     args = parser.parse_args()
 
-    # Allow CLI override of wind file / age
+    # apply CLI overrides
     if args.wind_path != WIND_SHARED_PATH:
-        globals()['WIND_SHARED_PATH'] = args.wind_path
+        WIND_SHARED_PATH = args.wind_path  # type: ignore[assignment]
     if args.wind_max_age != WIND_MAX_AGE_S:
-        globals()['WIND_MAX_AGE_S'] = args.wind_max_age
+        WIND_MAX_AGE_S = args.wind_max_age  # type: ignore[assignment]
 
     try:
         initialize_database(reset=args.reset_db)
