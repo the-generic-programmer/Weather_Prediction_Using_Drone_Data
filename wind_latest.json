@@ -1,1 +1,1 @@
-{"timestamp": "2025-07-24T17:35:05Z", "wind_speed_knots": 13.99, "wind_direction_degrees": 268.03, "flight_state": "flying_high_confidence", "confidence": 85.5, "method_weights": {"velocity_triangle": 0.5, "accel": 0.15}}
+{"timestamp": "2025-07-24T17:39:40Z", "wind_speed_knots": 23.49, "wind_direction_degrees": 204.2, "flight_state": "flying_high_confidence", "confidence": 54.1, "method_weights": {"velocity_triangle": 0.5, "accel": 0.15}}
