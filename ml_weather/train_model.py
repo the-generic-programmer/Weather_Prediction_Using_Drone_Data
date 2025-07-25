@@ -11,7 +11,22 @@ import os
 
 class WeatherPredictor:
     def __init__(self):
-        self.model = RandomForestRegressor(
+        # Initialize models for precipitation, wind speed, and wind direction
+        self.precip_model = RandomForestRegressor(
+            n_estimators=1000,
+            max_depth=25,
+            min_samples_split=5,
+            min_samples_leaf=2,
+            random_state=42
+        )
+        self.wind_speed_model = RandomForestRegressor(
+            n_estimators=1000,
+            max_depth=25,
+            min_samples_split=5,
+            min_samples_leaf=2,
+            random_state=42
+        )
+        self.wind_direction_model = RandomForestRegressor(
             n_estimators=1000,
             max_depth=25,
             min_samples_split=5,
@@ -22,7 +37,7 @@ class WeatherPredictor:
         
     def prepare_features(self, df: pd.DataFrame) -> tuple:
         """
-        Prepare features for the model (wind and other factors for rain prediction)
+        Prepare features for the model (wind and other factors for predictions)
         """
         df['hour'] = pd.to_datetime(df['time']).dt.hour
         df['month'] = pd.to_datetime(df['time']).dt.month
@@ -38,47 +53,67 @@ class WeatherPredictor:
         ]
         if 'altitude' in df.columns:
             feature_columns.append('altitude')
-        for col in feature_columns + ['precipitation']:
+        for col in feature_columns + ['precipitation', 'wind_speed_10m', 'wind_direction_10m']:
             if col not in df.columns:
                 raise ValueError(f"Missing required column: {col}")
-        target = df['precipitation']
-        return df[feature_columns], target
+        targets = {
+            'precipitation': df['precipitation'],
+            'wind_speed_2h': df['wind_speed_10m'],  # Proxy for 2h forecast
+            'wind_direction_2h': df['wind_direction_10m']  # Proxy for 2h forecast
+        }
+        return df[feature_columns], targets
 
-    def train(self, X: pd.DataFrame, y: pd.Series):
+    def train(self, X: pd.DataFrame, targets: dict):
         """
-        Train the weather prediction model
+        Train the weather prediction models for precipitation, wind speed, and direction
         """
         # Defensive: check for NaN
-        if X.isnull().any().any() or y.isnull().any():
+        if X.isnull().any().any() or any(targets[t].isnull().any() for t in targets):
             raise ValueError("Training data contains NaN values.")
         # Scale features
         X_scaled = self.scaler.fit_transform(X)
-        # Train model
-        self.model.fit(X_scaled, y)
+        # Train models
+        self.precip_model.fit(X_scaled, targets['precipitation'])
+        self.wind_speed_model.fit(X_scaled, targets['wind_speed_2h'])
+        self.wind_direction_model.fit(X_scaled, targets['wind_direction_2h'])
         
-    def evaluate(self, X: pd.DataFrame, y: pd.Series) -> dict:
+    def evaluate(self, X: pd.DataFrame, targets: dict) -> dict:
         """
-        Evaluate the model performance
+        Evaluate the model performance for all targets
         """
         # Defensive: check for NaN
-        if X.isnull().any().any() or y.isnull().any():
+        if X.isnull().any().any() or any(targets[t].isnull().any() for t in targets):
             raise ValueError("Evaluation data contains NaN values.")
         X_scaled = self.scaler.transform(X)
-        y_pred = self.model.predict(X_scaled)
-        mse = mean_squared_error(y, y_pred)
-        rmse = np.sqrt(mse)
-        r2 = r2_score(y, y_pred)
-        return {
-            'RMSE': rmse,
-            'R2': r2
-        }
+        results = {}
+        # Evaluate precipitation
+        y_pred_precip = self.precip_model.predict(X_scaled)
+        mse_precip = mean_squared_error(targets['precipitation'], y_pred_precip)
+        rmse_precip = np.sqrt(mse_precip)
+        r2_precip = r2_score(targets['precipitation'], y_pred_precip)
+        results['precipitation'] = {'RMSE': rmse_precip, 'R2': r2_precip}
+        # Evaluate wind speed
+        y_pred_speed = self.wind_speed_model.predict(X_scaled)
+        mse_speed = mean_squared_error(targets['wind_speed_2h'], y_pred_speed)
+        rmse_speed = np.sqrt(mse_speed)
+        r2_speed = r2_score(targets['wind_speed_2h'], y_pred_speed)
+        results['wind_speed_2h'] = {'RMSE': rmse_speed, 'R2': r2_speed}
+        # Evaluate wind direction
+        y_pred_dir = self.wind_direction_model.predict(X_scaled)
+        mse_dir = mean_squared_error(targets['wind_direction_2h'], y_pred_dir)
+        rmse_dir = np.sqrt(mse_dir)
+        r2_dir = r2_score(targets['wind_direction_2h'], y_pred_dir)
+        results['wind_direction_2h'] = {'RMSE': rmse_dir, 'R2': r2_dir}
+        return results
     
     def save_model(self, model_dir: str):
         """
-        Save the trained model and scaler
+        Save the trained models and scaler
         """
         os.makedirs(model_dir, exist_ok=True)
-        joblib.dump(self.model, os.path.join(model_dir, 'weather_model.joblib'))
+        joblib.dump(self.precip_model, os.path.join(model_dir, 'precip_model.joblib'))
+        joblib.dump(self.wind_speed_model, os.path.join(model_dir, 'wind_speed_model.joblib'))
+        joblib.dump(self.wind_direction_model, os.path.join(model_dir, 'wind_direction_model.joblib'))
         joblib.dump(self.scaler, os.path.join(model_dir, 'scaler.joblib'))
 
 def main():
@@ -96,16 +131,26 @@ def main():
     # Prepare features
     print("Preparing features...")
     try:
-        X, y = predictor.prepare_features(df)
+        X, targets = predictor.prepare_features(df)
     except Exception as e:
         print(f"Feature preparation error: {e}")
         return
     # Split data
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42
+    X_train, X_test, y_train_precip, y_test_precip = train_test_split(
+        X, targets['precipitation'], test_size=0.2, random_state=42
     )
-    # Train model
-    print("Training model...")
+    y_train = {
+        'precipitation': y_train_precip,
+        'wind_speed_2h': targets['wind_speed_2h'].loc[y_train_precip.index],
+        'wind_direction_2h': targets['wind_direction_2h'].loc[y_train_precip.index]
+    }
+    y_test = {
+        'precipitation': y_test_precip,
+        'wind_speed_2h': targets['wind_speed_2h'].loc[y_test_precip.index],
+        'wind_direction_2h': targets['wind_direction_2h'].loc[y_test_precip.index]
+    }
+    # Train models
+    print("Training models...")
     try:
         predictor.train(X_train, y_train)
     except Exception as e:
@@ -120,15 +165,29 @@ def main():
         print(f"Evaluation error: {e}")
         return
     print("\nTraining Set Metrics:")
-    print(f"RMSE: {train_metrics['RMSE']:.2f} mm")
-    print(f"R2 Score: {train_metrics['R2']:.3f}")
+    print("Precipitation:")
+    print(f"RMSE: {train_metrics['precipitation']['RMSE']:.2f} mm")
+    print(f"R2 Score: {train_metrics['precipitation']['R2']:.3f}")
+    print("Wind Speed (2h):")
+    print(f"RMSE: {train_metrics['wind_speed_2h']['RMSE']:.2f} m/s")
+    print(f"R2 Score: {train_metrics['wind_speed_2h']['R2']:.3f}")
+    print("Wind Direction (2h):")
+    print(f"RMSE: {train_metrics['wind_direction_2h']['RMSE']:.2f} degrees")
+    print(f"R2 Score: {train_metrics['wind_direction_2h']['R2']:.3f}")
     print("\nTest Set Metrics:")
-    print(f"RMSE: {test_metrics['RMSE']:.2f} mm")
-    print(f"R2 Score: {test_metrics['R2']:.3f}")
-    # Save model
-    print("\nSaving model...")
+    print("Precipitation:")
+    print(f"RMSE: {test_metrics['precipitation']['RMSE']:.2f} mm")
+    print(f"R2 Score: {test_metrics['precipitation']['R2']:.3f}")
+    print("Wind Speed (2h):")
+    print(f"RMSE: {test_metrics['wind_speed_2h']['RMSE']:.2f} m/s")
+    print(f"R2 Score: {test_metrics['wind_speed_2h']['R2']:.3f}")
+    print("Wind Direction (2h):")
+    print(f"RMSE: {test_metrics['wind_direction_2h']['RMSE']:.2f} degrees")
+    print(f"R2 Score: {test_metrics['wind_direction_2h']['R2']:.3f}")
+    # Save models
+    print("\nSaving models...")
     predictor.save_model("models")
-    print("Model saved in 'models' directory")
+    print("Models saved in 'models' directory")
 
 if __name__ == "__main__":
     main()

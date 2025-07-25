@@ -8,11 +8,12 @@ Major Features
 * Uses *processed* wind data written by wind_calculator.py (wind_latest.json).
 * Predicts near-surface ambient temperature from drone telemetry + ML model.
 * Blends model with live Open-Meteo API for stability + sanity.
-* Shows sunrise/sunset for drone & user locations (if astral available).
+* Shows sunrise/sunset/wind speed for drone & user locations (if astral available).
 * Logs to SQLite (weather_predict.db) with extended wind metadata columns.
 * Prints at startup whether SQLite DB was created, reset fresh, or already existed.
 * TCP streaming client for live drone telemetry (JSON lines).
 * One-shot CSV batch mode (reads last valid row).
+* Adds readable prediction time alongside timestamp.
 
 Noise Reduction
 ---------------
@@ -111,8 +112,10 @@ except Exception:
 # Configuration
 # -----------------------------------------------------------------------------
 MODEL_DIR = "models"
-MODEL_FILE = "weather_model.joblib"
+MODEL_FILE = "precip_model.joblib"
 SCALER_FILE = "scaler.joblib"
+WIND_SPEED_MODEL_FILE = "wind_speed_model.joblib"
+WIND_DIRECTION_MODEL_FILE = "wind_direction_model.joblib"
 
 EXPECTED_COORDS = (13.0, 77.625)  # user home (Bengaluru)
 DRONE_COORDS = (27.6889981, 86.726715)  # fallback (Lukla)
@@ -139,6 +142,10 @@ MODEL_VALID_RH_RANGE = (0.0, 100.0)
 MODEL_API_BLEND_THRESH_C = 8.0
 MODEL_MIN_WEIGHT = 0.05
 MODEL_MAX_WEIGHT = 1.0
+
+# Wind prediction confidence
+WIND_SPEED_CONF_RANGE = 2.0  # ± m/s for wind speed confidence
+WIND_DIR_CONF_RANGE = 20.0   # ± degrees for wind direction confidence
 
 # -----------------------------------------------------------------------------
 # Safe helpers
@@ -174,6 +181,7 @@ CREATE_PREDICTIONS_SQL = """
 CREATE TABLE IF NOT EXISTS predictions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     timestamp TEXT,
+    prediction_time_readable TEXT,
     predicted_temperature REAL,
     temperature_api REAL,
     humidity REAL,
@@ -195,19 +203,43 @@ CREATE TABLE IF NOT EXISTS predictions (
     wind_samples INTEGER,
     wind_std_dev_speed REAL,
     wind_std_dev_direction REAL,
-    wind_source TEXT
+    wind_source TEXT,
+    wind_speed_2h REAL,
+    wind_direction_2h REAL,
+    wind_speed_confidence REAL,
+    wind_direction_confidence REAL
 );
 """
 
 DB_COLUMNS = {
-    "timestamp": "TEXT", "predicted_temperature": "REAL", "temperature_api": "REAL",
-    "humidity": "REAL", "wind_speed": "REAL", "wind_direction": "REAL",
-    "confidence_range": "REAL", "humidity_timestamp": "TEXT", "sunrise_drone": "TEXT",
-    "sunset_drone": "TEXT", "sunrise_user": "TEXT", "sunset_user": "TEXT",
-    "info": "TEXT", "humidity_source": "TEXT", "drone_location": "TEXT",
-    "user_location": "TEXT", "rain_chance_2h": "REAL", "cloud_cover": "REAL",
-    "wind_confidence": "REAL", "wind_samples": "INTEGER",
-    "wind_std_dev_speed": "REAL", "wind_std_dev_direction": "REAL", "wind_source": "TEXT",
+    "timestamp": "TEXT",
+    "prediction_time_readable": "TEXT",
+    "predicted_temperature": "REAL",
+    "temperature_api": "REAL",
+    "humidity": "REAL",
+    "wind_speed": "REAL",
+    "wind_direction": "REAL",
+    "confidence_range": "REAL",
+    "humidity_timestamp": "TEXT",
+    "sunrise_drone": "TEXT",
+    "sunset_drone": "TEXT",
+    "sunrise_user": "TEXT",
+    "sunset_user": "TEXT",
+    "info": "TEXT",
+    "humidity_source": "TEXT",
+    "drone_location": "TEXT",
+    "user_location": "TEXT",
+    "rain_chance_2h": "REAL",
+    "cloud_cover": "REAL",
+    "wind_confidence": "REAL",
+    "wind_samples": "INTEGER",
+    "wind_std_dev_speed": "REAL",
+    "wind_std_dev_direction": "REAL",
+    "wind_source": "TEXT",
+    "wind_speed_2h": "REAL",
+    "wind_direction_2h": "REAL",
+    "wind_speed_confidence": "REAL",
+    "wind_direction_confidence": "REAL",
 }
 
 def initialize_database(reset: bool = False) -> None:
@@ -237,10 +269,11 @@ def log_prediction_to_db(result: Dict[str, Any]) -> bool:
         ts = result.get("timestamp", datetime.now(timezone.utc).isoformat())
         vals = (
             ts,
+            str(result.get('prediction_time_readable', '')),
             safe_float(result.get('predicted_temperature')),
             safe_float(result.get('temperature_api (°C)')),
             safe_float(result.get('humidity (% RH)')),
-            safe_float(result.get('wind_speed_knots')),        # stored numeric; interpret as kt in Metabase
+            safe_float(result.get('wind_speed_knots')),
             safe_float(result.get('wind_direction_degrees')),
             safe_float(result.get('confidence_range (±°C)')),
             str(result.get('humidity_timestamp', '')),
@@ -255,22 +288,27 @@ def log_prediction_to_db(result: Dict[str, Any]) -> bool:
             safe_float(result.get('rain_chance_2h (%)')),
             safe_float(result.get('cloud_cover (%)')),
             safe_float(result.get('wind_confidence', 0.0)),
-            safe_float(result.get('wind_samples', 0)),
+            int(safe_float(result.get('wind_samples', 0))),
             safe_float(result.get('wind_std_dev_speed', 0.0)),
             safe_float(result.get('wind_std_dev_direction', 0.0)),
             str(result.get('wind_source', 'external')),
+            safe_float(result.get('wind_speed_2h'), None),
+            safe_float(result.get('wind_direction_2h'), None),
+            safe_float(result.get('wind_speed_confidence'), None),
+            safe_float(result.get('wind_direction_confidence'), None),
         )
         cur.execute(
             """
             INSERT INTO predictions (
-                timestamp, predicted_temperature, temperature_api, humidity,
+                timestamp, prediction_time_readable, predicted_temperature, temperature_api, humidity,
                 wind_speed, wind_direction, confidence_range,
                 humidity_timestamp, sunrise_drone, sunset_drone,
                 sunrise_user, sunset_user, info,
                 humidity_source, drone_location, user_location,
                 rain_chance_2h, cloud_cover, wind_confidence, wind_samples,
-                wind_std_dev_speed, wind_std_dev_direction, wind_source
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                wind_std_dev_speed, wind_std_dev_direction, wind_source,
+                wind_speed_2h, wind_direction_2h, wind_speed_confidence, wind_direction_confidence
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             vals,
         )
@@ -305,7 +343,7 @@ def get_weather_data(lat: float, lon: float) -> Tuple[float, float, float, str, 
     """
     url = (
         "https://api.open-meteo.com/v1/forecast?"
-        f"latitude={lat}&longitude={lon}&current=temperature_2m,relative_humidity_2m,cloudcover"
+        f"latitude={lat}&longitude={lon}¤t=temperature_2m,relative_humidity_2m,cloudcover"
     )
     data = _om_get_json(url)
     if data:
@@ -410,7 +448,7 @@ def get_timezone(lat: float, lon: float) -> str:
 
 def get_location_name(lat: float, lon: float) -> str:
     if geolocator is None:
-        return f"Unknown, India"  # safe fallback given your usage
+        return "Unknown, India"
     try:
         loc = geolocator.reverse((lat, lon), language='en', timeout=10)
         if not loc:
@@ -434,7 +472,10 @@ def get_sunrise_sunset(lat: float, lon: float, tz_str: str) -> Dict[str, str]:
             "sunset_readable": s['sunset'].strftime("%I:%M %p %Z"),
         }
     except Exception:
-        return {"sunrise_readable": "Unknown", "sunset_readable": "Unknown"}
+        return {
+            "sunrise_readable": "Unknown",
+            "sunset_readable": "Unknown"
+        }
 
 # -----------------------------------------------------------------------------
 # Wind fetch (from wind_calculator.py's wind_latest.json)
@@ -489,7 +530,6 @@ def _get_latest_wind() -> Optional[Tuple[float, float]]:
     except Exception as e:
         logging.debug(f"wind load failed: {e}")
         return None
-
     obj = data[-1] if isinstance(data, list) and data else data
     parsed = _parse_wind_payload(obj)
     if not parsed:
@@ -506,13 +546,21 @@ class WeatherPredictor:
     def __init__(self, model_dir: str = MODEL_DIR):
         if joblib is None:
             raise ImportError("joblib missing; pip install joblib")
-        model_path = os.path.join(model_dir, MODEL_FILE)
+        precip_model_path = os.path.join(model_dir, MODEL_FILE)
         scaler_path = os.path.join(model_dir, SCALER_FILE)
-        if not os.path.exists(model_path):
-            raise FileNotFoundError(f"Model not found: {model_path}")
-        if not os.path.exists(scaler_path):
-            raise FileNotFoundError(f"Scaler not found: {scaler_path}")
-        self.model = joblib.load(model_path)
+        wind_speed_model_path = os.path.join(model_dir, WIND_SPEED_MODEL_FILE)
+        wind_direction_model_path = os.path.join(model_dir, WIND_DIRECTION_MODEL_FILE)
+        for path, name in [
+            (precip_model_path, "Precipitation model"),
+            (scaler_path, "Scaler"),
+            (wind_speed_model_path, "Wind speed model"),
+            (wind_direction_model_path, "Wind direction model")
+        ]:
+            if not os.path.exists(path):
+                raise FileNotFoundError(f"{name} not found: {path}")
+        self.precip_model = joblib.load(precip_model_path)
+        self.wind_speed_model = joblib.load(wind_speed_model_path)
+        self.wind_direction_model = joblib.load(wind_direction_model_path)
         self.scaler = joblib.load(scaler_path)
         self.feature_names = list(getattr(self.scaler, 'feature_names_in_', [])) or [
             'hour', 'month', 'relative_humidity_2m', 'pressure_msl',
@@ -591,15 +639,26 @@ class WeatherPredictor:
         df = df.astype(float)
         return df
 
-    def predict_raw(self, features: pd.DataFrame) -> float:
+    def predict_raw(self, features: pd.DataFrame) -> Dict[str, float]:
         try:
             if hasattr(self.scaler, 'feature_names_in_'):
                 features = features.reindex(columns=self.scaler.feature_names_in_, fill_value=0.0)
             X_scaled = self.scaler.transform(features)
-            return float(self.model.predict(X_scaled)[0])
+            precip_pred = float(self.precip_model.predict(X_scaled)[0])
+            wind_speed_pred = float(self.wind_speed_model.predict(X_scaled)[0])
+            wind_dir_pred = float(self.wind_direction_model.predict(X_scaled)[0])
+            return {
+                'precipitation': precip_pred,
+                'wind_speed_2h': wind_speed_pred,
+                'wind_direction_2h': wind_dir_pred
+            }
         except Exception as e:
             logging.error(f"Prediction failed: {e}")
-            return float('nan')
+            return {
+                'precipitation': float('nan'),
+                'wind_speed_2h': float('nan'),
+                'wind_direction_2h': float('nan')
+            }
 
 # -----------------------------------------------------------------------------
 # Prediction fusion / gating
@@ -682,26 +741,45 @@ def process_live_prediction(
         wind_speed_ms=wind_speed_ms, wind_direction=wind_direction_degrees,
         api_temp=temp_api
     )
-    model_pred = predictor.predict_raw(features)
-    fused_temp, ci = fuse_prediction(model_pred, temp_api, rh, p_msl)
+    model_preds = predictor.predict_raw(features)
+    precip_pred = model_preds['precipitation']
+    wind_speed_2h = model_preds['wind_speed_2h']
+    wind_direction_2h = model_preds['wind_direction_2h']
+    # Note: No temperature prediction in model_preds, using API temp as fallback
+    fused_temp, ci = fuse_prediction(temp_api, temp_api, rh, p_msl)  # No model temp prediction
 
-    # Monte Carlo-ish CI augmentation (float-safe; no dtype warnings)
+    # Monte Carlo-ish CI augmentation for precipitation and wind
     try:
         feats_np = features.to_numpy(dtype=float)
-        preds = []
+        precip_preds = []
+        speed_preds = []
+        dir_preds = []
         for _ in range(10):
             noise = np.random.normal(0, 0.02, size=feats_np.shape[1])
             noisy = feats_np[0] * (1 + noise)
             noisy_df = pd.DataFrame([noisy], columns=features.columns)
-            pred_n = predictor.predict_raw(noisy_df)
-            preds.append(pred_n)
-        preds = [p for p in preds if not math.isnan(p)]
-        if len(preds) >= 2:
-            sd = float(np.std(preds))
-            ci_mc = 1.96 * sd
-            ci = max(ci, round(ci_mc, 2))
+            preds = predictor.predict_raw(noisy_df)
+            if not math.isnan(preds['precipitation']):
+                precip_preds.append(preds['precipitation'])
+            if not math.isnan(preds['wind_speed_2h']):
+                speed_preds.append(preds['wind_speed_2h'])
+            if not math.isnan(preds['wind_direction_2h']):
+                dir_preds.append(preds['wind_direction_2h'])
+        ci_precip = WIND_SPEED_CONF_RANGE
+        ci_dir = WIND_DIR_CONF_RANGE
+        if len(precip_preds) >= 2:
+            sd_precip = float(np.std(precip_preds))
+            ci = max(ci, round(1.96 * sd_precip, 2))
+        if len(speed_preds) >= 2:
+            sd_speed = float(np.std(speed_preds))
+            ci_precip = max(WIND_SPEED_CONF_RANGE, round(1.96 * sd_speed, 2))
+        if len(dir_preds) >= 2:
+            sd_dir = float(np.std(dir_preds))
+            ci_dir = max(WIND_DIR_CONF_RANGE, round(1.96 * sd_dir, 2))
     except Exception as e:
         logging.debug(f"Noise CI calc failed: {e}")
+        ci_precip = WIND_SPEED_CONF_RANGE
+        ci_dir = WIND_DIR_CONF_RANGE
 
     # Location & astro
     humidity_time_fmt = format_humidity_time(rh_time)
@@ -713,20 +791,26 @@ def process_live_prediction(
     user_sun = get_sunrise_sunset(*EXPECTED_COORDS, user_tz)
     ts_in = safe(data.get("timestamp"))
     ts_out = ts_in if isinstance(ts_in, str) and ts_in else datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    prediction_time_readable = format_humidity_time(ts_out)
 
     # Forecast
     forecast = get_forecast_2h(lat, lon)
 
-    # Friendly summary (exact style you requested)
+    # Round wind values for display
+    wind_speed_2h_rounded = round(wind_speed_2h, 2) if not math.isnan(wind_speed_2h) else None
+    wind_dir_2h_rounded = round(wind_direction_2h, 1) if not math.isnan(wind_direction_2h) else None
+
+    # Friendly summary
     print(
         f"🌬️ Wind {wind_speed_knots:.2f} kt @ {wind_direction_degrees:.1f}° | "
-        f"Now {fused_temp:.1f}°C | +2h {forecast['forecast_temp_2h']}°C"
+        f"Now {fused_temp:.1f}°C | +2h Wind {wind_speed_2h_rounded or 0.0:.1f} m/s @ {wind_dir_2h_rounded or 0.0:.1f}°"
     )
 
     # Full JSON output
     output = {
         "timestamp": ts_out,
-        "rain_chance_2h (%)": float(rain_chance_2h),
+        "prediction_time_readable": prediction_time_readable,
+        "rain_chance_2h (%)": round(float(precip_pred), 2) if not math.isnan(precip_pred) else float(rain_chance_2h),
         "cloud_cover (%)": float(cloud_cover_percent),
         "temperature_api (°C)": round(temp_api, 1),
         "predicted_temperature": round(fused_temp, 2),
@@ -737,12 +821,16 @@ def process_live_prediction(
         "sunset_at_drone_location": drone_sun['sunset_readable'],
         "sunrise_at_user_location": user_sun['sunrise_readable'],
         "sunset_at_user_location": user_sun['sunset_readable'],
-        "info": f"Model raw={model_pred:.2f}°C | API={temp_api:.2f}°C | fused={fused_temp:.2f}°C | 95% CI ±{ci}°C",
+        "info": f"Precip raw={precip_pred:.2f}% | API={temp_api:.2f}°C | fused={fused_temp:.2f}°C | 95% CI ±{ci}°C",
         "humidity_source": rh_url,
         "drone_location": drone_loc,
         "user_location": user_loc,
         "wind_speed_knots": wind_speed_knots,
         "wind_direction_degrees": wind_direction_degrees,
+        "wind_speed_2h": wind_speed_2h_rounded,
+        "wind_direction_2h": wind_dir_2h_rounded,
+        "wind_speed_confidence": ci_precip,
+        "wind_direction_confidence": ci_dir,
         "forecast_temp_2h": forecast["forecast_temp_2h"],
         "forecast_cloud_cover_2h": forecast["forecast_cloud_cover_2h"],
         "forecast_rain_chance_2h": forecast["forecast_rain_chance_2h"],
@@ -763,7 +851,7 @@ def run_tcp_client(host: str = TCP_HOST_DEFAULT, port: int = TCP_PORT_DEFAULT,
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.settimeout(10)
                 s.connect((host, port))
-                logging.warning("Connected to TCP server.")
+                logging.info("Connected to TCP server.")
                 buffer = ''
                 while True:
                     try:
@@ -802,7 +890,7 @@ def run_tcp_client(host: str = TCP_HOST_DEFAULT, port: int = TCP_PORT_DEFAULT,
             time.sleep(retry_delay)
 
 # -----------------------------------------------------------------------------
-# CSV one‑shot mode
+# CSV one-shot mode
 # -----------------------------------------------------------------------------
 def predict_from_csv(csv_path: str) -> None:
     predictor = get_predictor()
