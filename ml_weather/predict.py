@@ -1,44 +1,31 @@
 #!/usr/bin/env python3
-"""
-Enhanced Weather Prediction Pipeline (final with DB status print)
-=================================================================
 
-Major Features
---------------
-* Uses *processed* wind data written by wind_calculator.py (wind_latest.json).
-* Predicts near-surface ambient temperature from drone telemetry + ML model.
-* Blends model with live Open-Meteo API for stability + sanity.
-* Shows sunrise/sunset/wind speed for drone & user locations (if astral available).
-* Logs to SQLite (weather_predict.db) with extended wind metadata columns.
-* Prints at startup whether SQLite DB was created, reset fresh, or already existed.
-* TCP streaming client for live drone telemetry (JSON lines).
-* One-shot CSV batch mode (reads last valid row).
-* Adds readable prediction time alongside timestamp.
+# --- Safe helpers ---
+import numpy as np
+from typing import Any, Optional
+def _is_nullish(val: Any) -> bool:
+    if val is None:
+        return True
+    if isinstance(val, str) and val.strip().lower() in ("", "nan", "none", "null", "na"):
+        return True
+    try:
+        if np.isnan(val):
+            return True
+    except Exception:
+        pass
+    return False
 
-Noise Reduction
----------------
-* Suppresses sklearn InconsistentVersionWarning.
-* Suppresses urllib3 InsecureRequestWarning (TLS).
-* Suppresses pandas FutureWarning for dtype assignment.
-* Minimal, user-focused console output.
+def safe(val: Any) -> Optional[Any]:
+    return None if _is_nullish(val) else val
 
-CLI Examples
-------------
-    python predict.py --tcp
-    python predict.py --tcp --host 127.0.0.1 --port 9000 --period 60
-    python predict.py --csv sample.csv
-    python predict.py --wind-path /tmp/wind_latest.json --wind-max-age 5
-
-`wind_latest.json` schema (written by wind_calculator.py pretty_print()):
-    {
-      "timestamp": "2025-07-23T12:47:47Z",
-      "wind_speed_knots": 11.86,
-      "wind_direction_degrees": 11.5
-    }
-
-If stale (> WIND_MAX_AGE_S) or missing, we fall back to 0 kt and warn periodically.
-
-"""
+def safe_float(val: Any, default: float = 0.0) -> float:
+    v = safe(val)
+    if v is None:
+        return default
+    try:
+        return float(v)
+    except Exception:
+        return default
 
 # -----------------------------------------------------------------------------
 # Standard libs
@@ -147,36 +134,6 @@ MODEL_MAX_WEIGHT = 1.0
 WIND_SPEED_CONF_RANGE = 2.0  # ± m/s for wind speed confidence
 WIND_DIR_CONF_RANGE = 20.0   # ± degrees for wind direction confidence
 
-# -----------------------------------------------------------------------------
-# Safe helpers
-# -----------------------------------------------------------------------------
-def _is_nullish(val: Any) -> bool:
-    if val is None:
-        return True
-    if isinstance(val, str) and val.strip().lower() in ("", "nan", "none", "null", "na"):
-        return True
-    try:
-        if np.isnan(val):  # type: ignore[arg-type]
-            return True
-    except Exception:
-        pass
-    return False
-
-def safe(val: Any) -> Optional[Any]:
-    return None if _is_nullish(val) else val
-
-def safe_float(val: Any, default: float = 0.0) -> float:
-    v = safe(val)
-    if v is None:
-        return default
-    try:
-        return float(v)
-    except Exception:
-        return default
-
-# -----------------------------------------------------------------------------
-# DB schema management
-# -----------------------------------------------------------------------------
 CREATE_PREDICTIONS_SQL = """
 CREATE TABLE IF NOT EXISTS predictions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -340,6 +297,30 @@ def get_weather_data(lat: float, lon: float) -> Tuple[float, float, float, str, 
     """
     Returns (temp_api, rh, cloud_cover, timestamp, source_url).
     Safe fallbacks used on error.
+def _is_nullish(val: Any) -> bool:
+    if val is None:
+        return True
+    if isinstance(val, str) and val.strip().lower() in ("", "nan", "none", "null", "na"):
+        return True
+    try:
+        if np.isnan(val):
+            return True
+    except Exception:
+        pass
+    return False
+
+def safe(val: Any) -> Optional[Any]:
+    return None if _is_nullish(val) else val
+
+def safe_float(val: Any, default: float = 0.0) -> float:
+    v = safe(val)
+    if v is None:
+        return default
+    try:
+        return float(v)
+    except Exception:
+        return default
+
     """
     url = (
         "https://api.open-meteo.com/v1/forecast?"
